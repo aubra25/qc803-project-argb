@@ -1,2 +1,1 @@
-# qc803-project-repo-template
-QC 803: Project Repository Templare
+# QC 803: Project Repository Template
