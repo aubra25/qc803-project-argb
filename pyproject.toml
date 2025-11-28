@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "example"
+version = "0.0.1"
+description = "This is an example project."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Example", email = "example@example.com"},
+]
+keywords = ["example"]
+
+dependencies = [
+  "qiskit",
+  "pytest"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/example_package"]
