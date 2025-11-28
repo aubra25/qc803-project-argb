@@ -11,8 +11,8 @@ project_repo/
 │   └── example_package/
 │       ├── __init__.py
 │       └── example.py
-├── tests/
-│   └── test_example.py
+└── tests/
+    └── test_example.py
 ```
 
 #### `pyrproject.tml`
