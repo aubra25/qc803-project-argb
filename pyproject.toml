@@ -19,7 +19,9 @@ dependencies = [
   "numpy",
   "matplotlib",
   "pylatexenc",
-  "sympy"
+  "sympy",
+  "qiskit-aer",
+  "ipykernel"
 ]
 
 [tool.hatch.build.targets.wheel]
