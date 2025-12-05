@@ -15,8 +15,12 @@ keywords = ["example"]
 
 dependencies = [
   "qiskit",
-  "pytest"
+  "pytest",
+  "numpy",
+  "matplotlib",
+  "pylatexenc",
+  "sympy"
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/example_package"]
+packages = ["src/example_package", "src/shor_code_package", "src/test_utilities_package"]
