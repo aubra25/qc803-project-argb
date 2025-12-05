@@ -19,10 +19,10 @@ class ShorQubit():
         n_ancillas = 8
         qc = QuantumCircuit(n_qubits + n_ancillas)
         
-        #Compse components
+        #Compose components
         qc.compose(self.encoder(), inplace = True)
         qc.barrier()
-        qc.compose(self.stabilizer_measurement_circuit(), inplace = True)
+        qc.compose(self.syndrome_correction_circuit(), clbits=range(8), inplace = True)
 
         return qc
 
@@ -48,7 +48,7 @@ class ShorQubit():
     
         return qc
     
-    def stabilizer_measurement_circuit(self):
+    def syndrome_correction_circuit(self, correct_syndromes = True):
         """
         Return a QuantumCircuit measuring the stabilizers of the Shor code.
         
@@ -59,13 +59,20 @@ class ShorQubit():
         #Initialize circuit
         stabilizers = self.get_stabilizers()
         qc = QuantumCircuit(9)
-        ancilla_register = AncillaRegister(len(stabilizers))
-        classical_register = ClassicalRegister(len(stabilizers), name = 'Stabilizer measurements')
+        ancilla_register = AncillaRegister(1)
         qc.add_register(ancilla_register)
-        qc.add_register(classical_register)
+        z_register = ClassicalRegister(2, name = 'Z stabilizer measurements')
+        qc.add_register(z_register)
+
+        x_registers = []
+        for i in range(3):
+            x_register = ClassicalRegister(2, name = f'X stabilizer measurements {i}')
+            qc.add_register(x_register)
+            x_registers.append(x_register)
 
         #Add phase estimation for each stabilizer
-        for ancilla, classic_bit, stabilizer in zip(ancilla_register, classical_register, stabilizers):
+        ancilla = ancilla_register[0]
+        for classic_bit, stabilizer in zip([*z_register, *[c for cs in x_registers for c in cs]], stabilizers):
             cu = stabilizer.to_gate().control(1)
             qc.h(ancilla)
             qc.append(cu, [ancilla, *range(9)])
@@ -74,9 +81,41 @@ class ShorQubit():
 
             #Reset the ancilla for use in another round of error correction
             qc.reset(ancilla)
+
+        if correct_syndromes:
             qc.barrier()
+            qc = self._add_syndrome_correction(qc, z_register, x_registers)
 
         return qc
+    
+    def _add_syndrome_correction(self, qc, z_register, x_registers):
+        """
+        Adds syndrome corretion to qc depending on the measured syndrome.
+        """
+        #Configure restoring action depending on syndrome
+        x_corrections = [
+            (0b01, 0),
+            (0b11, 1),
+            (0b10, 2),
+        ]
+        for (group, x_register) in enumerate(x_registers):
+            for (syndrome, qubit) in x_corrections:
+                with qc.if_test((x_register, syndrome)):
+                    qc.x(qubit + 3*group)
+
+        z_corrections = [
+            (0b01, [0,1,2]),
+            (0b11, [3,4,5]),
+            (0b10, [6,7,8])
+            ]
+        for (syndrome, qubits) in z_corrections:
+            with qc.if_test((z_register, syndrome)):
+                for qubit in qubits:
+                    qc.z(qubit)
+    
+        return qc
+        
+
 
     def get_stabilizers(self):
         """
