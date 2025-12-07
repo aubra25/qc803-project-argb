@@ -143,6 +143,25 @@ class ShorQubit():
             stabilizer_circuits.append(qc)
         
         return stabilizer_circuits
+    
+    def logical_X(self):
+        """
+        Returns a QuantumCircuit implementing the logical X gate for this logical qubit.
+        """
+        qc = QuantumCircuit(9)
+        for n in range(9):
+            qc.z(n)
+        return qc
+
+    def logical_Z(self):
+        """
+        Returns a QuantumCircuit implementing the logical Z gate for this logical qubit.
+        """
+        qc = QuantumCircuit(9)
+        for n in range(9):
+            qc.x(n)
+        return qc
+
 
 class ConcatenatedShorQubit:
     """
@@ -187,7 +206,31 @@ class ConcatenatedShorQubit:
         pass
 
     def get_stabilizers(self):
-        pass
+        """
+        Get the stabilizers for the outer code. These are constructed using the logical X and Z operations on the inner level
+        logical states.
+        """
+        #Set up needed components for the stabilizer circuit.
+        shor_code_stabilizers = ["XXXXXXIII", "IIIXXXXXX", "ZZIIIIIII", "IZZIIIIII", "IIIZZIIII", "IIIIZZIII", "IIIIIIZZI", "IIIIIIIZZ"]
+        groups = np.split(np.arange(self.num_qubits), 9) #Nine groupings of qubits.
+        xl = self._inner_code.logical_X()
+        zl = self._inner_code.logical_Z()
+
+        #Construct each stabilizer circuit
+        stabilizer_circuits = []
+        for stabilizer in shor_code_stabilizers:
+            qc = QuantumCircuit(self.num_qubits)
+            for i, pauli in enumerate(stabilizer):
+                match(pauli):
+                    case "X":
+                        qc.compose(xl, qubits = groups[i], inplace = True)
+                    case "Z":
+                        qc.compose(zl, qubits = groups[i], inplace = True)
+                    case "I":
+                        pass #Do nothing for the identity.
+            stabilizer_circuits.append(qc)
+        
+        return stabilizer_circuits
 
 class ShorCircuit:
     """

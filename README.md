@@ -41,6 +41,8 @@ Then, you can install the project package using `pip` as shown below.
 pip install .
 ```
 
+The project is using the Qiskit Aer simulator which is not yet compatible with python 3.14. Python version 3.13.1 must be used instead.
+
 ## Tests
 Unit tests can be run using `pytest` (see https://docs.pytest.org/en/stable/ for more details), which should output something like the following.
 ```

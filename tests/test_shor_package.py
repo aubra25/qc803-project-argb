@@ -193,11 +193,8 @@ class TestShorQubit():
         assert np.isclose(qi.state_fidelity(final_statevector, target), 1)
 
 class TestConcanetatedShorQubit():
-
-    @pytest.mark.parametrize("input_state", [0, 1])
-    def test_encoder_produces_logical_states(self, input_state):
-        #Arrange
-        #Construct target stabilizer state. The stabilizers are like the ones for the ordinary Shor code for each
+    def logical_state_stabilizers(self, input_state):
+        #The stabilizers are like the ones for the ordinary Shor code for each
         #of the 9 qubit groupings plus an addtional set of stabilizers which are translations of the originals of
         #using the logical operators of the inner code.
         shor_code_stabilizers = ["XXXXXXIII", "IIIXXXXXX", "ZZIIIIIII", "IZZIIIIII", "IIIZZIIII", "IIIIZZIII", "IIIIIIZZI", "IIIIIIIZZ"]
@@ -208,10 +205,16 @@ class TestConcanetatedShorQubit():
         translator = str.maketrans({"X": xl, "Z": zl, "I": il})
         concatenated_code_stabilizer = [scs.translate(translator) for scs in shor_code_stabilizers]
         inner_code_stabilizers = [n * il + scs + (8-n) * il for n in range(9) for scs in shor_code_stabilizers]
+        return [zll_stabilizer, *concatenated_code_stabilizer, *inner_code_stabilizers]
+
+
+    @pytest.mark.parametrize("input_state", [0, 1])
+    def test_encoder_produces_logical_states(self, input_state):
+        #Arrange
+        #Construct target stabilizer state. 
+        target = qi.StabilizerState.from_stabilizer_list(self.logical_state_stabilizers(input_state))
         
-        target = qi.StabilizerState.from_stabilizer_list([zll_stabilizer, *concatenated_code_stabilizer, *inner_code_stabilizers], allow_redundant=True)
-        
-        #Construct encoding circtui
+        #Construct encoding circuit
         qc = QuantumCircuit(9**2)
         if input_state == 1:
             qc.x(0) #input |1>
@@ -223,3 +226,27 @@ class TestConcanetatedShorQubit():
 
         #Assert
         assert encoded_logical_0.equiv(target)
+
+    @pytest.mark.parametrize("input_state, stabilizer", [(input_state, stabilizer) 
+                                            for input_state in [0, 1] 
+                                            for stabilizer in ConcatenatedShorQubit(2).get_stabilizers()])
+    def test_logical_states_are_unaffected_by_stabilizers(self, input_state, stabilizer):
+        #Arrange
+        #Construct target stabilizer state. 
+        target = qi.StabilizerState.from_stabilizer_list(self.logical_state_stabilizers(input_state))
+        
+        #Construct encoding circuit
+        qc = QuantumCircuit(9**2)
+        if input_state == 1:
+            qc.x(0) #input |1>
+        csq = ConcatenatedShorQubit(2)
+        qc.compose(csq.encoder(), inplace=True)
+        qc.compose(stabilizer, inplace = True)
+
+        #Act
+        encoded_logical_0 = qi.StabilizerState(qc)
+
+        #Assert
+        assert encoded_logical_0.equiv(target)
+
+    
