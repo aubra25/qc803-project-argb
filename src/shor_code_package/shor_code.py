@@ -1,4 +1,4 @@
-from qiskit import QuantumCircuit, AncillaRegister, QuantumRegister, ClassicalRegister
+from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister
 import numpy as np
 from qiskit_aer import AerSimulator
 
@@ -61,18 +61,24 @@ class ShorQubit():
         qc = QuantumCircuit(9)
         ancilla_register = AncillaRegister(1)
         qc.add_register(ancilla_register)
+
+        #Register for measuring Z stabilizer
         z_register = ClassicalRegister(2, name = 'Z stabilizer measurements')
         qc.add_register(z_register)
 
+        #Registers for measuring X stabilizers
         x_registers = []
         for i in range(3):
             x_register = ClassicalRegister(2, name = f'X stabilizer measurements {i}')
             qc.add_register(x_register)
             x_registers.append(x_register)
 
+        #Create combined classical register
+        combined_register = np.concatenate((z_register, np.array(x_registers).flatten()))
+
         #Add phase estimation for each stabilizer
         ancilla = ancilla_register[0]
-        for classic_bit, stabilizer in zip([*z_register, *[c for cs in x_registers for c in cs]], stabilizers):
+        for classic_bit, stabilizer in zip(combined_register, stabilizers):
             cu = stabilizer.to_gate().control(1)
             qc.h(ancilla)
             qc.append(cu, [ancilla, *range(9)])
@@ -82,6 +88,7 @@ class ShorQubit():
             #Reset the ancilla for use in another round of error correction
             qc.reset(ancilla)
 
+        #For testing purposes, correction of the syndromes can be disabled
         if correct_syndromes:
             qc.barrier()
             qc = self._add_syndrome_correction(qc, z_register, x_registers)
@@ -98,7 +105,7 @@ class ShorQubit():
             (0b11, 1),
             (0b10, 2),
         ]
-        for (group, x_register) in enumerate(x_registers):
+        for (group, x_register) in enumerate(x_registers): #Loop through each grouping of three qubits
             for (syndrome, qubit) in x_corrections:
                 with qc.if_test((x_register, syndrome)):
                     qc.x(qubit + 3*group)
@@ -114,7 +121,6 @@ class ShorQubit():
                     qc.z(qubit)
     
         return qc
-        
 
 
     def get_stabilizers(self):
@@ -137,7 +143,52 @@ class ShorQubit():
             stabilizer_circuits.append(qc)
         
         return stabilizer_circuits
-        
+
+class ConcatenatedShorQubit:
+    """
+    Class for constructing concatenations of the Shor nine qubit code recursively.
+    """
+
+    def __init__(self, n):
+        """
+        Initializes the class. n is number of concatenations of Shor nine qubit code with itself.
+        """
+        if n < 2:
+            raise Exception("n must be greater than 1.")
+        self.n = n
+        self.num_qubits = 9**n #physical qubits
+        self.num_ancillas = 1
+        self._inner_code = ConcatenatedShorQubit(n - 1) if n > 2 else ShorQubit()
+
+    def encoder(self):
+        """
+        Create the encoding circuit of a single (logical) qubit to 9^n physical qubits.
+        The qubit whose state should be encoded in the concatenated Shor code has index 0.
+        """
+        #Initialize circuit
+        qc = QuantumCircuit(self.num_qubits)
+        indices = np.split(np.arange(self.num_qubits), 9)
+        first_qubit_of_each_group = [sub_indices[0] for sub_indices in indices]
+
+        #Add outer encoder
+        qc.compose(ShorQubit().encoder(), qubits = first_qubit_of_each_group, inplace=True)
+        qc.barrier()
+
+        #Add inner encoders
+        for sub_indices in indices:
+            qc.compose(self._inner_code.encoder(), qubits = sub_indices, inplace = True)
+
+        return qc
+    
+    def syndrome_correction_circuit(self):
+        pass
+    
+    def _add_syndrome_correction(self):
+        pass
+
+    def get_stabilizers(self):
+        pass
+
 class ShorCircuit:
     """
     This class handles construction of QuantumCircuits using the Shor nine qubit quantum error correction code
@@ -191,13 +242,3 @@ class ShorCircuit:
         qc = self.get_circuit()
         result = self.aer.run(qc.decompose(), shots = shots).result()
         return result
-
-
-    
-
-    
-    
-
-
-
-
