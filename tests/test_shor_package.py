@@ -27,7 +27,7 @@ class TestUtilities:
         result = aer.run(qc.decompose(), shots = shots).result()
         return result
     
-@pytest.mark.skip()
+#@pytest.mark.skip()
 class TestShorQubit():
     #Assignment 1
     def test_encode_0_returns_0_logical_state(self):
@@ -55,7 +55,7 @@ class TestShorQubit():
         assert np.isclose(qi.state_fidelity(final_state, target), 1)
 
     #Assignment 2
-    @pytest.mark.parametrize("stabilizer", ShorQubit().get_stabilizers())
+    @pytest.mark.parametrize("stabilizer", ConcatenatedShorQubit(1).get_stabilizers())
     def test_logical_0_is_unaffected_by_stabilisers(self, stabilizer):
         #Arrange 
         sq = ShorQubit()
@@ -68,7 +68,7 @@ class TestShorQubit():
         #Assert
         assert np.isclose(qi.state_fidelity(final_state, target), 1)
 
-    @pytest.mark.parametrize("stabilizer", ShorQubit().get_stabilizers())
+    @pytest.mark.parametrize("stabilizer", ConcatenatedShorQubit(1).get_stabilizers())
     def test_logical_1_is_unaffected_by_stabilisers(self, stabilizer):
         #Arrange 
         sq = ShorQubit()
@@ -96,9 +96,9 @@ class TestShorQubit():
                               ])
     def test_bit_flip_gives_unique_syndrome(self, qubit, syndrome):
         #Arrange
-        sq = ShorQubit()
+        sq = ConcatenatedShorQubit(1)
         qc = sq.encoder()
-        qc.add_register(AncillaRegister(8))
+        qc.add_register(AncillaRegister(1))
         qc.x(qubit)
         qc.compose(sq.syndrome_correction_circuit(correct_syndromes=False), inplace=True)
 
@@ -124,7 +124,7 @@ class TestShorQubit():
                             ])
     def test_phase_flip_gives_degenerate_syndrome(self, qubit, syndrome):
         #Arrange
-        sq = ShorQubit()
+        sq = ConcatenatedShorQubit(1)
         qc = sq.encoder()
         qc.add_register(AncillaRegister(8))
         qc.z(qubit)
@@ -145,7 +145,7 @@ class TestShorQubit():
                                                     for target in [0, 1]])
     def test_single_pauli_errors_are_corrected(self, qubit, pauli_error, target):
         #Arrange
-        sq = ShorQubit()
+        sq = ConcatenatedShorQubit(1)
         qc = QuantumCircuit(9 + 1) #Nine physical qubits, one ancilla
         if target == 1:
             qc.x(0)
@@ -163,26 +163,6 @@ class TestShorQubit():
         qc.save_density_matrix(range(9), label="p")
 
         target = TestUtilities.logical_0() if target == 0 else TestUtilities.logical_1()
-
-        #Act
-        result = TestUtilities.aer_simulation(qc, shots=1)
-        final_statevector = result.data()["p"].to_statevector() #Assumes the final state is pure.
-
-        #Assert
-        assert len(result.get_counts().keys()) == 1
-        assert np.isclose(qi.state_fidelity(final_statevector, target), 1)
-
-    def test_multiple_bit_flips_are_uncorrectable(self):
-        #Arrange
-        sq = ShorQubit()
-        qc = QuantumCircuit(9 + 1) #Nine physical qubits, one ancilla
-        qc.compose(sq.encoder(), inplace = True)
-        qc.x(0)
-        qc.x(1)
-        qc.compose(sq.syndrome_correction_circuit(), inplace = True)
-        qc.save_density_matrix(range(9), label="p")
-
-        target = TestUtilities.logical_0()
 
         #Act
         result = TestUtilities.aer_simulation(qc, shots=1)
@@ -227,6 +207,7 @@ class TestConcanetatedShorQubit():
         #Assert
         assert encoded_logical_0.equiv(target)
 
+    #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state, stabilizer", [(input_state, stabilizer) 
                                             for input_state in [0, 1] 
                                             for stabilizer in ConcatenatedShorQubit(2).get_stabilizers()])

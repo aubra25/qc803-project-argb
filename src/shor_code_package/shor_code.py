@@ -162,7 +162,6 @@ class ShorQubit():
             qc.x(n)
         return qc
 
-
 class ConcatenatedShorQubit:
     """
     Class for constructing concatenations of the Shor nine qubit code recursively.
@@ -172,44 +171,170 @@ class ConcatenatedShorQubit:
         """
         Initializes the class. n is number of concatenations of Shor nine qubit code with itself.
         """
-        if n < 2:
-            raise Exception("n must be greater than 1.")
         self.n = n
         self.num_qubits = 9**n #physical qubits
         self.num_ancillas = 1
-        self._inner_code = ConcatenatedShorQubit(n - 1) if n > 2 else ShorQubit()
+        self._inner_code = ConcatenatedShorQubit(n - 1) if n >= 1 else None
 
     def encoder(self):
         """
         Create the encoding circuit of a single (logical) qubit to 9^n physical qubits.
         The qubit whose state should be encoded in the concatenated Shor code has index 0.
         """
+        #Base case
+        if self.n == 0:
+            return QuantumCircuit(1)
+
         #Initialize circuit
         qc = QuantumCircuit(self.num_qubits)
-        indices = np.split(np.arange(self.num_qubits), 9)
-        first_qubit_of_each_group = [sub_indices[0] for sub_indices in indices]
+        outer_groups = np.split(np.arange(self.num_qubits), 3)
+        outer_principal_qubits = [sub_indices[0] for sub_indices in outer_groups]
+        
+        qc.cx(outer_principal_qubits[0], outer_principal_qubits[1])
+        qc.cx(outer_principal_qubits[0], outer_principal_qubits[2])
+        
+        for outer_group in outer_groups:
+            inner_group = np.split(outer_group, 3)
+            inner_principal_qubits = [group[0] for group in inner_group]
 
-        #Add outer encoder
-        qc.compose(ShorQubit().encoder(), qubits = first_qubit_of_each_group, inplace=True)
-        qc.barrier()
+            qc.h(inner_principal_qubits[0])
+            qc.cx(inner_principal_qubits[0], inner_principal_qubits[1])
+            qc.cx(inner_principal_qubits[0], inner_principal_qubits[2])
 
-        #Add inner encoders
-        for sub_indices in indices:
-            qc.compose(self._inner_code.encoder(), qubits = sub_indices, inplace = True)
+            for group in inner_group:
+                qc.compose(self._inner_code.encoder(), qubits = group, inplace = True)
 
         return qc
     
-    def syndrome_correction_circuit(self):
-        pass
-    
-    def _add_syndrome_correction(self):
-        pass
+    def syndrome_correction_circuit(self, correct_syndromes = True):
+        """
+        Construct circuit for measuring syndromes. By default also incldues circuit for correcting the diagnosed
+        errors.
+        """
+        #Base case
+        if self.n == 0:
+            return QuantumCircuit(1 + 1) #Ancilla is included
 
-    def get_stabilizers(self):
+        #Inductive step
+        #Initialize circuit
+        qc = QuantumCircuit(self.num_qubits + self.num_ancillas)
+        stabilizer_circuits = self.get_stabilizers()
+
+        #Save indices of relevant qubits
+        groups = np.split(np.arange(self.num_qubits), 9)
+        ancilla = self.num_qubits #Last index
+
+        #Due to the nature of the code, a register is created for pairs of the stabilizers.
+        classical_registers = []
+        for _ in range(4):
+            register = ClassicalRegister(2)
+            classical_registers.append(register)
+            qc.add_register(register)
+
+        #Use quantum phase estimation for each stabilizer to measure its expectation
+        #Stabilizers of this layer
+        for (register, circuit) in zip(np.array(classical_registers).flatten(), stabilizer_circuits):
+            cu = circuit.to_gate().control(1)
+            qc.h(ancilla)
+            qc.append(cu, [ancilla, *range(self.num_qubits)])
+            qc.h(ancilla)
+            qc.measure(ancilla, register)
+
+            #Reset the ancilla for use in another round of error correction
+            qc.reset(ancilla)
+
+        #For testing purposes, correction of the syndromes can be disabled
+        if correct_syndromes:
+            qc.barrier()
+            qc = self._add_syndrome_correction(qc, classical_registers)
+
+        #Diagnose syndromes and correct in inner layers
+        for group in groups:
+            qc.compose(self._inner_code.syndrome_correction_circuit(correct_syndromes), qubits = [*group, ancilla], inplace = True)
+
+        return qc
+    
+    def _add_syndrome_correction(self, qc, classical_registers):
         """
-        Get the stabilizers for the outer code. These are constructed using the logical X and Z operations on the inner level
+        Set up correction of errors based on diagnosed syndromes.
+        """
+        #Set up indices and registers
+        groups = np.split(np.arange(self.num_qubits), 3)
+        z_register, *x_registers = classical_registers
+
+        #Map restoring action depending on syndrome
+        register_states = [
+            (0b01),
+            (0b11),
+            (0b10)
+        ]
+
+        #Configure restoring actions
+        for (syndrome, group) in zip(register_states, groups):
+            with qc.if_test((z_register, syndrome)):
+                #ZZZ
+                for sub_group in np.split(groups, 3):
+                    qc.append(self._inner_code.logical_Z(), qubits = sub_group)
+
+        for (group, x_register) in zip(groups, x_registers): #Loop through each of three groupings
+            for (sub_group, syndrome) in zip(np.split(group, 3), register_states):
+                #X
+                with qc.if_test((x_register, syndrome)):
+                    qc.append(self._inner_code.logical_X(), qubits = sub_group)
+
+        return qc
+
+    def logical_X(self):
+        """
+        The logical X operation for this codes logical qubit representation.
+        """
+        #Base case
+        if self.n == 0:
+            qc = QuantumCircuit(1)
+            qc.x(0)
+            return qc
+        
+        #Inductive step
+        groups = np.split(np.arange(self.num_qubits), 9)
+        qc = QuantumCircuit(self.num_qubits)
+
+        #The logical X gate of the Shor code is ZZZZZZZZZ
+        for group in groups:
+            qc.compose(self._inner_code.logical_Z(), qubits = group, inplace = True)
+
+        return qc
+
+    def logical_Z(self):
+        """
+        The logical Z operation for this codes logical qubit representation.
+        """
+        #Base case
+        if self.n == 0:
+            qc = QuantumCircuit(1)
+            qc.z(0)
+            return qc
+        
+        #Inductive step
+        groups = np.split(np.arange(self.num_qubits), 9)
+        qc = QuantumCircuit(self.num_qubits)
+
+        #The logical X gate of the Shor code is XXXXXXXXX
+        for group in groups:
+            qc.compose(self._inner_code.logical_X(), qubits = group, inplace = True)
+
+        return qc
+
+    def get_stabilizers(self, include_inner_stabilizers = False):
+        """
+        Returns the stabilizers for the outer code. These are constructed using the logical X and Z operations on the inner level
         logical states.
+        param include_inner_stabilizers can be set to also return inner stabilizers.
         """
+        #Base case
+        if self.n == 0:
+            return []
+
+        #Inductive step
         #Set up needed components for the stabilizer circuit.
         shor_code_stabilizers = ["XXXXXXIII", "IIIXXXXXX", "ZZIIIIIII", "IZZIIIIII", "IIIZZIIII", "IIIIZZIII", "IIIIIIZZI", "IIIIIIIZZ"]
         groups = np.split(np.arange(self.num_qubits), 9) #Nine groupings of qubits.
@@ -230,7 +355,17 @@ class ConcatenatedShorQubit:
                         pass #Do nothing for the identity.
             stabilizer_circuits.append(qc)
         
-        return stabilizer_circuits
+        #Collect the stabilizers of the inner codes on each group
+        inner_stabilizer_circuits = []
+        if include_inner_stabilizers == True:
+            inner_stabilizers = self._inner_code.get_stabilizers()
+            for group in groups:
+                for stabilizer in inner_stabilizers:
+                    qc = QuantumCircuit(self.num_qubits)
+                    qc.compose(stabilizer, qubits = group, inplace = True)
+                    inner_stabilizer_circuits.append(qc)
+
+        return [*stabilizer_circuits, *inner_stabilizer_circuits]
 
 class ShorCircuit:
     """
