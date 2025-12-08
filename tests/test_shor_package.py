@@ -1,6 +1,6 @@
 from shor_code_package.shor_code import ShorQubit, ConcatenatedShorQubit
 import qiskit.quantum_info as qi
-from qiskit import QuantumCircuit, AncillaRegister
+from qiskit import QuantumCircuit, AncillaRegister, transpile
 from qiskit_aer import AerSimulator
 import numpy as np
 import pytest
@@ -58,7 +58,7 @@ class TestShorQubit():
     @pytest.mark.parametrize("stabilizer", ConcatenatedShorQubit(1).get_stabilizers())
     def test_logical_0_is_unaffected_by_stabilisers(self, stabilizer):
         #Arrange 
-        sq = ShorQubit()
+        sq = ConcatenatedShorQubit(1)
         qc = sq.encoder().compose(stabilizer)
         target = TestUtilities.logical_0()
 
@@ -71,7 +71,7 @@ class TestShorQubit():
     @pytest.mark.parametrize("stabilizer", ConcatenatedShorQubit(1).get_stabilizers())
     def test_logical_1_is_unaffected_by_stabilisers(self, stabilizer):
         #Arrange 
-        sq = ShorQubit()
+        sq = ConcatenatedShorQubit(1)
         qc = TestUtilities.ket_1_circuit().compose(sq.encoder().compose(stabilizer))
         target = TestUtilities.logical_1()
 
@@ -84,15 +84,15 @@ class TestShorQubit():
     #Assignement 3 and 4
     @pytest.mark.parametrize("qubit, syndrome", 
                              [
-                                 (0,"00 10 00 00"),
-                                 (1,"00 11 00 00"),
-                                 (2,"00 01 00 00"),
-                                 (3,"00 00 10 00"),
-                                 (4,"00 00 11 00"),
-                                 (5,"00 00 01 00"),
-                                 (6,"00 00 00 10"),
-                                 (7,"00 00 00 11"),
-                                 (8,"00 00 00 01"),
+                                 (0,"00100000"),
+                                 (1,"00110000"),
+                                 (2,"00010000"),
+                                 (3,"00001000"),
+                                 (4,"00001100"),
+                                 (5,"00000100"),
+                                 (6,"00000010"),
+                                 (7,"00000011"),
+                                 (8,"00000001"),
                               ])
     def test_bit_flip_gives_unique_syndrome(self, qubit, syndrome):
         #Arrange
@@ -108,19 +108,19 @@ class TestShorQubit():
         #Assert
         #There should only be a single syndrome as the simulation is noiseless
         assert len(result.keys()) == 1
-        assert list(result.keys())[0] == syndrome[::-1] #Bit order is reversed in qiskit
+        assert list(result.keys())[0] == syndrome #Bit order is reversed in qiskit
 
     @pytest.mark.parametrize("qubit, syndrome", 
                             [
-                                (0,"10 00 00 00"),
-                                (1,"10 00 00 00"),
-                                (2,"10 00 00 00"),
-                                (3,"11 00 00 00"),
-                                (4,"11 00 00 00"),
-                                (5,"11 00 00 00"),
-                                (6,"01 00 00 00"),
-                                (7,"01 00 00 00"),
-                                (8,"01 00 00 00"),
+                                (0,"10000000"),
+                                (1,"10000000"),
+                                (2,"10000000"),
+                                (3,"11000000"),
+                                (4,"11000000"),
+                                (5,"11000000"),
+                                (6,"01000000"),
+                                (7,"01000000"),
+                                (8,"01000000"),
                             ])
     def test_phase_flip_gives_degenerate_syndrome(self, qubit, syndrome):
         #Arrange
@@ -136,12 +136,12 @@ class TestShorQubit():
         #Assert
         #There should only be a single syndrome as the simulation is noiseless
         assert len(result.keys()) == 1
-        assert list(result.keys())[0] == syndrome[::-1] #Bit order is reversed in qiskit
+        assert list(result.keys())[0] == syndrome #Bit order is reversed in qiskit
 
     #Assignment 5
     @pytest.mark.parametrize("qubit, pauli_error, target", [(qubit, pauli_error, target) 
                                                     for qubit in range(9) 
-                                                    for pauli_error in ["Y"] 
+                                                    for pauli_error in ["Y"]#, "Z", "X"] 
                                                     for target in [0, 1]])
     def test_single_pauli_errors_are_corrected(self, qubit, pauli_error, target):
         #Arrange
@@ -173,7 +173,7 @@ class TestShorQubit():
         assert np.isclose(qi.state_fidelity(final_statevector, target), 1)
 
 class TestConcanetatedShorQubit():
-    def logical_state_stabilizers(self, input_state):
+    def logical_state_stabilizers(self, input_state, include_ancilla = False):
         #The stabilizers are like the ones for the ordinary Shor code for each
         #of the 9 qubit groupings plus an addtional set of stabilizers which are translations of the originals of
         #using the logical operators of the inner code.
@@ -181,13 +181,21 @@ class TestConcanetatedShorQubit():
         zl = "X"*9
         xl = "Z"*9
         il = "I"*9
-        zll_stabilizer = "-"+9*xl if input_state == 1 else 9*xl #This stabilizer distinguishes between logical 0 and logical 1.
+        zll = 9*xl if input_state == 1 else 9*xl #This stabilizer distinguishes between logical 0 and logical 1.
         translator = str.maketrans({"X": xl, "Z": zl, "I": il})
         concatenated_code_stabilizer = [scs.translate(translator) for scs in shor_code_stabilizers]
         inner_code_stabilizers = [n * il + scs + (8-n) * il for n in range(9) for scs in shor_code_stabilizers]
-        return [zll_stabilizer, *concatenated_code_stabilizer, *inner_code_stabilizers]
+        
+        stabilizers = [*concatenated_code_stabilizer, *inner_code_stabilizers]
+        if include_ancilla:
+            stabilizers = ["I" + s for s in stabilizers] #Adding I for the ancilla.
+            stabilizers.append("Z" + 9**2*"I") #Fixing ancilla = |0>.
+            zll = "Z" + zll
+        
+        zll =  "-"+zll if input_state == 1 else zll
+        return [*stabilizers, zll]
 
-
+    #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state", [0, 1])
     def test_encoder_produces_logical_states(self, input_state):
         #Arrange
@@ -202,10 +210,10 @@ class TestConcanetatedShorQubit():
         qc.compose(csq.encoder(), inplace=True)
 
         #Act
-        encoded_logical_0 = qi.StabilizerState(qc)
+        encoded_logical_state = qi.StabilizerState(qc)
 
         #Assert
-        assert encoded_logical_0.equiv(target)
+        assert encoded_logical_state.equiv(target)
 
     #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state, stabilizer", [(input_state, stabilizer) 
@@ -229,5 +237,37 @@ class TestConcanetatedShorQubit():
 
         #Assert
         assert encoded_logical_0.equiv(target)
+
+    @pytest.mark.parametrize("input_state, num_ys", [(input_state, num_ys) 
+                                        for input_state in [0, 1] 
+                                        for num_ys in [1,2,3,4,5]])
+    def test_several_bit_and_phase_flips_get_corrected(self, input_state, num_ys):
+        #Arrange
+        target = qi.StabilizerState.from_stabilizer_list(self.logical_state_stabilizers(input_state, include_ancilla=True))
+
+        #Circuit
+        csq = ConcatenatedShorQubit(2)
+        qc = QuantumCircuit(csq.num_qubits + csq.num_ancillas)
+        if input_state == 1:
+            qc.x(0)
+        qc.compose(csq.encoder(), qubits = range(csq.num_qubits), inplace=True)
+
+        for i in range(num_ys):
+            qc.y(i*9) #add phase flips in separate groups.
+        qc.compose(csq.syndrome_correction_circuit(), inplace=True)
+        qc.save_stabilizer()
+        
+        #Simulator
+        aer = AerSimulator(method="stabilizer")
+        transpiled_qc = transpile(qc, aer)
+
+        #Act
+        result = aer.run(transpiled_qc, shots = 1).result()
+        final_stabilizer_state = result.data()['stabilizer']
+
+        #Assert
+        assert target.equiv(final_stabilizer_state)
+
+        
 
     

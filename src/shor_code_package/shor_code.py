@@ -207,6 +207,45 @@ class ConcatenatedShorQubit:
         return qc
     
     def syndrome_correction_circuit(self, correct_syndromes = True):
+        qc = QuantumCircuit(self.num_qubits + self.num_ancillas)
+        stabilizer_circuits = self.get_stabilizers(True)[::-1]
+        recovering_circuits = self.get_recovering_circuits(True)[::-1]
+        classical_register_bits = ClassicalRegister(len(stabilizer_circuits))
+        qc.add_register(classical_register_bits)
+
+        ancilla = self.num_qubits
+
+
+        for n in range(len(stabilizer_circuits)//2):
+            for k in range(2):
+                #Measure the stabilizer using quantum phase estimation
+                cu = stabilizer_circuits[2*n + k].to_gate().control(1)
+                qc.h(ancilla)
+                qc.append(cu, [ancilla, *range(self.num_qubits)])
+                qc.h(ancilla)
+                qc.measure(ancilla, classical_register_bits[2*n + k])
+                qc.reset(ancilla)
+
+            #Correct syndromes
+            if correct_syndromes:
+                with qc.if_test((classical_register_bits[2*n], 1)) as _else:
+                    with qc.if_test((classical_register_bits[2*n + 1], 1)) as _inner_else:
+                        # 0b11
+                        qc.compose(recovering_circuits[3*n + 1], inplace = True)
+                    with _inner_else:
+                        # 0b10
+                        qc.compose(recovering_circuits[3*n + 0], inplace = True)
+                with _else:
+                    with qc.if_test((classical_register_bits[2*n + 1], 1)):
+                        # 0b01
+                        qc.compose(recovering_circuits[3*n + 2], inplace = True)
+                        
+        return qc
+
+
+
+
+    def syndrome_correction_circuit_3(self, correct_syndromes = True):
         """
         Construct circuit for measuring syndromes. By default also incldues circuit for correcting the diagnosed
         errors.
@@ -224,16 +263,16 @@ class ConcatenatedShorQubit:
         groups = np.split(np.arange(self.num_qubits), 9)
         ancilla = self.num_qubits #Last index
 
-        #Due to the nature of the code, a register is created for pairs of the stabilizers.
-        classical_registers = []
-        for _ in range(4):
-            register = ClassicalRegister(2)
-            classical_registers.append(register)
-            qc.add_register(register)
+        #Registers are needed for each of the stabilizers pairwise.
+        num_classical_registers = np.sum([8*9**m for m in range(self.n)]) #e.g. (8*9 + 8)*9 = 8*9**2 + 8*9.
+        classical_registers = ClassicalRegister(num_classical_registers)
+        qc.add_register(classical_registers)
+        outer_classical_registers = np.array(classical_registers[:len(stabilizer_circuits)])
+        inner_classical_registers = np.array(classical_registers[len(stabilizer_circuits):])
 
         #Use quantum phase estimation for each stabilizer to measure its expectation
         #Stabilizers of this layer
-        for (register, circuit) in zip(np.array(classical_registers).flatten(), stabilizer_circuits):
+        for (register, circuit) in zip(np.array(outer_classical_registers).flatten(), stabilizer_circuits):
             cu = circuit.to_gate().control(1)
             qc.h(ancilla)
             qc.append(cu, [ancilla, *range(self.num_qubits)])
@@ -243,45 +282,44 @@ class ConcatenatedShorQubit:
             #Reset the ancilla for use in another round of error correction
             qc.reset(ancilla)
 
-        #For testing purposes, correction of the syndromes can be disabled
+        #Diagnose syndromes and correct in inner layers
+        for (group, classical_register) in zip(groups, np.split(inner_classical_registers, 9)):
+            qc.compose(self._inner_code.syndrome_correction_circuit(correct_syndromes=False), #Syndrome correction is added in the top layer. 
+                       qubits = [*group, ancilla], 
+                       clbits = classical_register, 
+                       inplace = True)
+        
+        #Correction of the syndromes can be disabled
         if correct_syndromes:
             qc.barrier()
             qc = self._add_syndrome_correction(qc, classical_registers)
-
-        #Diagnose syndromes and correct in inner layers
-        for group in groups:
-            qc.compose(self._inner_code.syndrome_correction_circuit(correct_syndromes), qubits = [*group, ancilla], inplace = True)
 
         return qc
     
     def _add_syndrome_correction(self, qc, classical_registers):
         """
-        Set up correction of errors based on diagnosed syndromes.
+        Set up correction of errors based on diagnosed syndromes. Classical registers behave badly with
+        recursion, so this is done for all stabilizers of the code at the top layer.
         """
-        #Set up indices and registers
-        groups = np.split(np.arange(self.num_qubits), 3)
-        z_register, *x_registers = classical_registers
-
-        #Map restoring action depending on syndrome
-        register_states = [
-            (0b01),
-            (0b11),
-            (0b10)
-        ]
+        #Pair up classical registers with recovering circuits. There are 3 recovery operations per 2 bits in the classical register.
+        recovering_circuits = self.get_recovering_circuits(include_inner_recovering_circuits = True)
+        classical_registers = np.array(classical_registers)
 
         #Configure restoring actions
-        for (syndrome, group) in zip(register_states, groups):
-            with qc.if_test((z_register, syndrome)):
-                #ZZZ
-                for sub_group in np.split(groups, 3):
-                    qc.append(self._inner_code.logical_Z(), qubits = sub_group)
-
-        for (group, x_register) in zip(groups, x_registers): #Loop through each of three groupings
-            for (sub_group, syndrome) in zip(np.split(group, 3), register_states):
-                #X
-                with qc.if_test((x_register, syndrome)):
-                    qc.append(self._inner_code.logical_X(), qubits = sub_group)
-
+        #There are two bits in the classical register per 3 recovering circuits.
+        for n, classical_register in enumerate(np.split(classical_registers, len(classical_registers)//2)):
+            with qc.if_test((classical_register[0], 1)) as _else:
+                with qc.if_test((classical_register[1], 1)) as _inner_else:
+                    # 0b11
+                    qc.compose(recovering_circuits[3*n + 1], inplace = True)
+                with _inner_else:
+                    # 0b10
+                    qc.compose(recovering_circuits[3*n + 0], inplace = True)
+            with _else:
+                with qc.if_test((classical_register[1], 1)):
+                    # 0b01
+                    qc.compose(recovering_circuits[3*n + 2], inplace = True)
+                    
         return qc
 
     def logical_X(self):
@@ -358,7 +396,7 @@ class ConcatenatedShorQubit:
         #Collect the stabilizers of the inner codes on each group
         inner_stabilizer_circuits = []
         if include_inner_stabilizers == True:
-            inner_stabilizers = self._inner_code.get_stabilizers()
+            inner_stabilizers = self._inner_code.get_stabilizers(True)
             for group in groups:
                 for stabilizer in inner_stabilizers:
                     qc = QuantumCircuit(self.num_qubits)
@@ -366,6 +404,46 @@ class ConcatenatedShorQubit:
                     inner_stabilizer_circuits.append(qc)
 
         return [*stabilizer_circuits, *inner_stabilizer_circuits]
+    
+    def get_recovering_circuits(self, include_inner_recovering_circuits = False):
+        """
+        Get circuits for performing the recovery operations.
+        """
+        #Base case
+        if self.n == 0:
+            return [] #No recovering actions for a single qubit.
+        
+        #Inductive step
+        groups = np.split(np.arange(self.num_qubits), 3)
+        
+        #Construct phase flip correction circuits.
+        zzz_circuits = []
+        for group in groups:
+            qc = QuantumCircuit(self.num_qubits)
+            for sub_group in np.split(group, 3):
+                qc.compose(self._inner_code.logical_Z(), qubits = sub_group, inplace = True)
+            zzz_circuits.append(qc)
+
+        #Construct bit flip correction circuits
+        x_circuits = []
+        for group in groups:
+            for sub_group in np.split(group, 3):
+                qc = QuantumCircuit(self.num_qubits)
+                qc.compose(self._inner_code.logical_X(), qubits = sub_group, inplace = True)
+                x_circuits.append(qc)
+
+        #Construct the recovery circuits for each of the nine "physical" qubits.
+        all_inner_recovering_circuits = []
+        if include_inner_recovering_circuits:
+            inner_recovering_circuits = self._inner_code.get_recovering_circuits(True)
+            for sub_group in np.split(np.arange(self.num_qubits), 9):
+                for recovering_circuit in inner_recovering_circuits:
+                    qc = QuantumCircuit(self.num_qubits)
+                    qc.compose(recovering_circuit, qubits = sub_group, inplace = True)
+                    all_inner_recovering_circuits.append(qc)
+                    
+        return [*zzz_circuits, *x_circuits, *all_inner_recovering_circuits]
+
 
 class ShorCircuit:
     """
