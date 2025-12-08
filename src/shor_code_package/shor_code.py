@@ -207,15 +207,22 @@ class ConcatenatedShorQubit:
         return qc
     
     def syndrome_correction_circuit(self, correct_syndromes = True):
+        """
+        Constructs the circuit for measuring syndromes and correcting the errors.
+        Classical registers behave badly with recursion, so this is implemented
+        more imperatively.
+        """    
+        #Initialize circuit and get stabilizers and recovering actions
         qc = QuantumCircuit(self.num_qubits + self.num_ancillas)
         stabilizer_circuits = self.get_stabilizers(True)[::-1]
         recovering_circuits = self.get_recovering_circuits(True)[::-1]
         classical_register_bits = ClassicalRegister(len(stabilizer_circuits))
         qc.add_register(classical_register_bits)
 
-        ancilla = self.num_qubits
+        ancilla = self.num_qubits #Ancilla is the last qubit.
 
-
+        #Add each stabilizer to the circuit. In the Shor code the stabilizers from pairs
+        #which each receive a classical register which the restoring action is conditioned on.
         for n in range(len(stabilizer_circuits)//2):
             for k in range(2):
                 #Measure the stabilizer using quantum phase estimation
@@ -238,88 +245,7 @@ class ConcatenatedShorQubit:
                 with _else:
                     with qc.if_test((classical_register_bits[2*n + 1], 1)):
                         # 0b01
-                        qc.compose(recovering_circuits[3*n + 2], inplace = True)
-                        
-        return qc
-
-
-
-
-    def syndrome_correction_circuit_3(self, correct_syndromes = True):
-        """
-        Construct circuit for measuring syndromes. By default also incldues circuit for correcting the diagnosed
-        errors.
-        """
-        #Base case
-        if self.n == 0:
-            return QuantumCircuit(1 + 1) #Ancilla is included
-
-        #Inductive step
-        #Initialize circuit
-        qc = QuantumCircuit(self.num_qubits + self.num_ancillas)
-        stabilizer_circuits = self.get_stabilizers()
-
-        #Save indices of relevant qubits
-        groups = np.split(np.arange(self.num_qubits), 9)
-        ancilla = self.num_qubits #Last index
-
-        #Registers are needed for each of the stabilizers pairwise.
-        num_classical_registers = np.sum([8*9**m for m in range(self.n)]) #e.g. (8*9 + 8)*9 = 8*9**2 + 8*9.
-        classical_registers = ClassicalRegister(num_classical_registers)
-        qc.add_register(classical_registers)
-        outer_classical_registers = np.array(classical_registers[:len(stabilizer_circuits)])
-        inner_classical_registers = np.array(classical_registers[len(stabilizer_circuits):])
-
-        #Use quantum phase estimation for each stabilizer to measure its expectation
-        #Stabilizers of this layer
-        for (register, circuit) in zip(np.array(outer_classical_registers).flatten(), stabilizer_circuits):
-            cu = circuit.to_gate().control(1)
-            qc.h(ancilla)
-            qc.append(cu, [ancilla, *range(self.num_qubits)])
-            qc.h(ancilla)
-            qc.measure(ancilla, register)
-
-            #Reset the ancilla for use in another round of error correction
-            qc.reset(ancilla)
-
-        #Diagnose syndromes and correct in inner layers
-        for (group, classical_register) in zip(groups, np.split(inner_classical_registers, 9)):
-            qc.compose(self._inner_code.syndrome_correction_circuit(correct_syndromes=False), #Syndrome correction is added in the top layer. 
-                       qubits = [*group, ancilla], 
-                       clbits = classical_register, 
-                       inplace = True)
-        
-        #Correction of the syndromes can be disabled
-        if correct_syndromes:
-            qc.barrier()
-            qc = self._add_syndrome_correction(qc, classical_registers)
-
-        return qc
-    
-    def _add_syndrome_correction(self, qc, classical_registers):
-        """
-        Set up correction of errors based on diagnosed syndromes. Classical registers behave badly with
-        recursion, so this is done for all stabilizers of the code at the top layer.
-        """
-        #Pair up classical registers with recovering circuits. There are 3 recovery operations per 2 bits in the classical register.
-        recovering_circuits = self.get_recovering_circuits(include_inner_recovering_circuits = True)
-        classical_registers = np.array(classical_registers)
-
-        #Configure restoring actions
-        #There are two bits in the classical register per 3 recovering circuits.
-        for n, classical_register in enumerate(np.split(classical_registers, len(classical_registers)//2)):
-            with qc.if_test((classical_register[0], 1)) as _else:
-                with qc.if_test((classical_register[1], 1)) as _inner_else:
-                    # 0b11
-                    qc.compose(recovering_circuits[3*n + 1], inplace = True)
-                with _inner_else:
-                    # 0b10
-                    qc.compose(recovering_circuits[3*n + 0], inplace = True)
-            with _else:
-                with qc.if_test((classical_register[1], 1)):
-                    # 0b01
-                    qc.compose(recovering_circuits[3*n + 2], inplace = True)
-                    
+                        qc.compose(recovering_circuits[3*n + 2], inplace = True)    
         return qc
 
     def logical_X(self):
