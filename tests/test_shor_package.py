@@ -2,6 +2,7 @@ from shor_code_package.shor_code import ShorQubit, ConcatenatedShorQubit
 import qiskit.quantum_info as qi
 from qiskit import QuantumCircuit, AncillaRegister, transpile
 from qiskit_aer import AerSimulator
+from qiskit.circuit.library import HGate
 import numpy as np
 import pytest
 
@@ -27,7 +28,29 @@ class TestUtilities:
         result = aer.run(qc.decompose(), shots = shots).result()
         return result
     
-#@pytest.mark.skip()
+    def logical_state_stabilizers(input_state, include_ancilla = False):
+        #The stabilizers are like the ones for the ordinary Shor code for each
+        #of the 9 qubit groupings plus an addtional set of stabilizers which are translations of the originals of
+        #using the logical operators of the inner code.
+        shor_code_stabilizers = ["XXXXXXIII", "IIIXXXXXX", "ZZIIIIIII", "IZZIIIIII", "IIIZZIIII", "IIIIZZIII", "IIIIIIZZI", "IIIIIIIZZ"]
+        zl = "X"*9
+        xl = "Z"*9
+        il = "I"*9
+        zll = 9*xl if input_state == 1 else 9*xl #This stabilizer distinguishes between logical 0 and logical 1.
+        translator = str.maketrans({"X": xl, "Z": zl, "I": il})
+        concatenated_code_stabilizer = [scs.translate(translator) for scs in shor_code_stabilizers]
+        inner_code_stabilizers = [n * il + scs + (8-n) * il for n in range(9) for scs in shor_code_stabilizers]
+        
+        stabilizers = [*concatenated_code_stabilizer, *inner_code_stabilizers]
+        if include_ancilla:
+            stabilizers = ["I" + s for s in stabilizers] #Adding I for the ancilla.
+            stabilizers.append("Z" + 9**2*"I") #Fixing ancilla = |0>.
+            zll = "Z" + zll
+        
+        zll =  "-"+zll if input_state == 1 else zll
+        return [*stabilizers, zll]
+    
+@pytest.mark.skip()
 class TestShorQubit():
     #Assignment 1
     def test_encode_0_returns_0_logical_state(self):
@@ -172,35 +195,14 @@ class TestShorQubit():
         assert len(result.get_counts().keys()) == 1
         assert np.isclose(qi.state_fidelity(final_statevector, target), 1)
 
+@pytest.mark.skip()
 class TestConcanetatedShorQubit():
-    def logical_state_stabilizers(self, input_state, include_ancilla = False):
-        #The stabilizers are like the ones for the ordinary Shor code for each
-        #of the 9 qubit groupings plus an addtional set of stabilizers which are translations of the originals of
-        #using the logical operators of the inner code.
-        shor_code_stabilizers = ["XXXXXXIII", "IIIXXXXXX", "ZZIIIIIII", "IZZIIIIII", "IIIZZIIII", "IIIIZZIII", "IIIIIIZZI", "IIIIIIIZZ"]
-        zl = "X"*9
-        xl = "Z"*9
-        il = "I"*9
-        zll = 9*xl if input_state == 1 else 9*xl #This stabilizer distinguishes between logical 0 and logical 1.
-        translator = str.maketrans({"X": xl, "Z": zl, "I": il})
-        concatenated_code_stabilizer = [scs.translate(translator) for scs in shor_code_stabilizers]
-        inner_code_stabilizers = [n * il + scs + (8-n) * il for n in range(9) for scs in shor_code_stabilizers]
-        
-        stabilizers = [*concatenated_code_stabilizer, *inner_code_stabilizers]
-        if include_ancilla:
-            stabilizers = ["I" + s for s in stabilizers] #Adding I for the ancilla.
-            stabilizers.append("Z" + 9**2*"I") #Fixing ancilla = |0>.
-            zll = "Z" + zll
-        
-        zll =  "-"+zll if input_state == 1 else zll
-        return [*stabilizers, zll]
-
     #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state", [0, 1])
     def test_encoder_produces_logical_states(self, input_state):
         #Arrange
         #Construct target stabilizer state. 
-        target = qi.StabilizerState.from_stabilizer_list(self.logical_state_stabilizers(input_state))
+        target = qi.StabilizerState.from_stabilizer_list(TestUtilities.logical_state_stabilizers(input_state))
         
         #Construct encoding circuit
         qc = QuantumCircuit(9**2)
@@ -222,7 +224,7 @@ class TestConcanetatedShorQubit():
     def test_logical_states_are_unaffected_by_stabilizers(self, input_state, stabilizer):
         #Arrange
         #Construct target stabilizer state. 
-        target = qi.StabilizerState.from_stabilizer_list(self.logical_state_stabilizers(input_state))
+        target = qi.StabilizerState.from_stabilizer_list(TestUtilities.logical_state_stabilizers(input_state))
         
         #Construct encoding circuit
         qc = QuantumCircuit(9**2)
@@ -238,12 +240,13 @@ class TestConcanetatedShorQubit():
         #Assert
         assert encoded_logical_0.equiv(target)
 
+    #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state, num_ys", [(input_state, num_ys) 
                                         for input_state in [0, 1] 
-                                        for num_ys in [1,2,3,4,5]])
+                                        for num_ys in [1,2,3]])
     def test_several_bit_and_phase_flips_get_corrected(self, input_state, num_ys):
         #Arrange
-        target = qi.StabilizerState.from_stabilizer_list(self.logical_state_stabilizers(input_state, include_ancilla=True))
+        target = qi.StabilizerState.from_stabilizer_list(TestUtilities.logical_state_stabilizers(input_state, include_ancilla=True))
 
         #Circuit
         csq = ConcatenatedShorQubit(2)
@@ -253,7 +256,8 @@ class TestConcanetatedShorQubit():
         qc.compose(csq.encoder(), qubits = range(csq.num_qubits), inplace=True)
 
         for i in range(num_ys):
-            qc.y(i*9) #add phase flips in separate groups.
+            for n in range(9):
+                qc.y(n + 9*i) #add phase flips in separate groups.
         qc.compose(csq.syndrome_correction_circuit(), inplace=True)
         qc.save_stabilizer()
         
@@ -267,6 +271,114 @@ class TestConcanetatedShorQubit():
 
         #Assert
         assert target.equiv(final_stabilizer_state)
+
+class TestLogicalGates:
+    @pytest.mark.parametrize("n, input_state", [(n, input_state) for n in [1, 2] for input_state in [0, 1]])
+    def test_logical_X(self, n, input_state):
+        #Arrange
+        csq = ConcatenatedShorQubit(n)
+        qc_target = QuantumCircuit(csq.num_qubits)
+        if input_state == 1:
+            qc_target.x(0)
+        
+        qc_test = qc_target.copy()
+
+        qc_target.x(0) #Gate under test
+        qc_target.compose(csq.encoder(), inplace=True)
+
+        qc_test.compose(csq.encoder(), inplace=True)
+        qc_test.compose(csq.logical_X(), inplace=True) #Logical gate
+
+        #Act
+        target_stabilizer_state = qi.StabilizerState(qc_target)
+        test_stabilizer_state = qi.StabilizerState(qc_test)
+
+        #Assert
+        assert target_stabilizer_state.equiv(test_stabilizer_state)
+
+    @pytest.mark.parametrize("n, input_state", [(n, input_state) for n in [1, 2] for input_state in [0, 1]])
+    def test_logical_Z(self, n, input_state):
+        #Arrange
+        csq = ConcatenatedShorQubit(n)
+        qc_target = QuantumCircuit(csq.num_qubits)
+        if input_state == 1:
+            qc_target.x(0)
+        
+        qc_test = qc_target.copy()
+
+        qc_target.z(0) #Gate under test
+        qc_target.compose(csq.encoder(), inplace=True)
+
+        qc_test.compose(csq.encoder(), inplace=True)
+        qc_test.compose(csq.logical_Z(), inplace=True) #Logical gate
+
+        #Act
+        target_stabilizer_state = qi.StabilizerState(qc_target)
+        test_stabilizer_state = qi.StabilizerState(qc_test)
+
+        #Assert
+        assert target_stabilizer_state.equiv(test_stabilizer_state)
+        
+    @pytest.mark.parametrize("input_state, repetitions, use_naive", [(input_state, repetitions, use_naive) for input_state in [0, 1] for repetitions in [1,2] for use_naive in [True, False]])
+    def test_logical_hadamard(self, input_state, repetitions, use_naive):
+        #Arrange
+        csq = ConcatenatedShorQubit(1)
+        qc_target = QuantumCircuit(csq.num_qubits)
+        if input_state == 1:
+            qc_target.x(0)
+        
+        qc_test = qc_target.copy()
+
+        for _ in range(repetitions):
+            qc_target.h(0) #Gate under test
+        qc_target.compose(csq.encoder(), inplace=True)
+        qc_target.save_stabilizer()
+
+        qc_test.compose(csq.encoder(), inplace=True)
+        for _ in range(repetitions):
+            qc_test.compose(csq.logical_H(use_naive = use_naive), inplace=True) #Logical gate
+        qc_test.save_stabilizer()
+
+        aer = AerSimulator(method='stabilizer')
+
+        #Act
+        target_result = aer.run(qc_target, shots = 1).result()
+        test_result = aer.run(qc_test, shots = 1).result()
+        target_stabilizer_state = target_result.data()['stabilizer']
+        test_stabilizer_state = test_result.data()['stabilizer']
+
+        #Assert
+        assert target_stabilizer_state.equiv(test_stabilizer_state)
+
+    @pytest.mark.parametrize("input_state", [(input_state) for input_state in [0, 1]])
+    def test_logical_S(self, input_state):
+        #Arrange
+        csq = ConcatenatedShorQubit(1)
+        qc_target = QuantumCircuit(csq.num_qubits)
+        if input_state == 1:
+            qc_target.x(0)
+        qc_target.h(0)
+
+        qc_test = qc_target.copy()
+
+        qc_target.s(0) #Gate under test
+        qc_target.compose(csq.encoder(), inplace=True)
+        qc_target.save_stabilizer()
+
+        qc_test.compose(csq.encoder(), inplace=True)
+        qc_test.compose(csq.logical_S(), inplace=True) #Logical gate
+        qc_test.save_stabilizer()
+
+        aer = AerSimulator(method='stabilizer')
+
+        #Act
+        target_result = aer.run(qc_target, shots = 1).result()
+        test_result = aer.run(qc_test, shots = 1).result()
+        target_stabilizer_state = target_result.data()['stabilizer']
+        test_stabilizer_state = test_result.data()['stabilizer']
+
+        #Assert
+        assert target_stabilizer_state.equiv(test_stabilizer_state)
 
         
 

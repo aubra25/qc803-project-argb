@@ -1,4 +1,5 @@
 from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister
+from qiskit.quantum_info import Operator, Clifford
 import numpy as np
 from qiskit_aer import AerSimulator
 
@@ -287,6 +288,67 @@ class ConcatenatedShorQubit:
             qc.compose(self._inner_code.logical_X(), qubits = group, inplace = True)
 
         return qc
+    
+    def logical_H(self, use_naive = False):
+        """
+        The logical H operation. If use_naive obtained by naively conjugating H on the input qubit with the encoder unitary.
+        """
+        if self.n >= 2:
+            raise Exception("Not defined for n >= 2. Operation matrix would be 2**81 x 2**81")
+        
+        #Base case:
+        if self.n == 0:
+            qc = QuantumCircuit(1)
+            qc.h(0)
+            return qc
+
+        #Inductive step
+        if use_naive:
+            groups = np.split(np.arange(self.num_qubits), 9)
+            #The naive H gate of the Shor code is 1/sqrt(2)(X_0 X_1 X_2 + Z_0 Z_3 Z_6)
+            #Construct operators
+            inner_xl = self._inner_code.logical_X()
+            inner_zl = self._inner_code.logical_Z()
+            qc_X0_X1_X2 = QuantumCircuit(self.num_qubits)
+            qc_Z0_Z3_Z6 = QuantumCircuit(self.num_qubits)
+            for n in range(3):
+                qc_X0_X1_X2.compose(inner_xl, qubits = groups[n], inplace=True)
+                qc_Z0_Z3_Z6.compose(inner_zl, qubits = groups[3*n], inplace=True)
+
+            #Combine into linear combination
+            h = 1/np.sqrt(2)*(Operator(qc_X0_X1_X2) + Operator(qc_Z0_Z3_Z6))
+        else:
+            xl = self.logical_X()
+            zl = self.logical_Z()
+            h = 1/np.sqrt(2)*(Operator(xl) + Operator(zl))
+
+        #For using in stabilizer circuits, convert operation to a Clifford gate
+        #It is not trivial that the logical H gate would be a Clifford operation but it
+        #turns out that it is the case!
+        h_clifford = Clifford.from_operator(h)
+        return h_clifford.to_circuit()
+    
+    def logical_S(self):
+        """
+        Create the logical phase gate for the code.
+        """
+        if self.n >= 2:
+            raise Exception("Not defined for n >= 2. Operation matrix would be 2**81 x 2**81")
+        #Base case:
+        if self.n == 0:
+            qc = QuantumCircuit(1)
+            qc.s(0)
+            return qc
+
+        #Inductive step
+        qc = QuantumCircuit(self.num_qubits)
+        h = 1/2*((1+1j)*Operator.from_label("I"*self.num_qubits) + (1-1j)*Operator.from_label("X"*self.num_qubits))
+
+        #For using in stabilizer circuits, convert operation to a Clifford gate
+        h_clifford = Clifford.from_operator(h)
+        return h_clifford.to_circuit()
+        
+
 
     def get_stabilizers(self, include_inner_stabilizers = False):
         """
