@@ -347,8 +347,6 @@ class ConcatenatedShorQubit:
         #For using in stabilizer circuits, convert operation to a Clifford gate
         h_clifford = Clifford.from_operator(h)
         return h_clifford.to_circuit()
-        
-
 
     def get_stabilizers(self, include_inner_stabilizers = False):
         """
@@ -438,51 +436,155 @@ class ShorCircuit:
     This class handles construction of QuantumCircuits using the Shor nine qubit quantum error correction code
     """
 
-    def __init__(self, shor_code = ShorQubit()):
+    def __init__(self, qubit_code_depths):
         """
-        Initialize the ShorCircuit. A ShorCode to use must be injected.
+        Initialize the ShorCircuit. Each qubit has a ShorQubit as its encoding used for performing gates
+        which is an n times concatenated ShorQubit where n is given for each qubit as the qubit_code_depths
+        param.
         """
-        self.sc = shor_code
-        self.aer = AerSimulator()
-        self._initialize_circuit()
+        self.codes = [ConcatenatedShorQubit(n) for n in qubit_code_depths]
+        self.num_logical_qubits = len(self.codes)
+        self.num_qubits = sum([c.num_qubits for c in self.codes])
+        self.num_ancillas = 1
 
-    def _initialize_circuit(self):
-        """
-        Initializises the encoder circuit
-        """
-        self._circuit = QuantumCircuit(self.sc.num_qubits)
-        self._circuit.compose(self.sc.encoder())
+        #Save indices of physical qubits for each logical qubit
+        acc = 0
+        self.qubit_indices = []
+        for code in self.codes:
+            self.qubit_indices.append(range(acc, acc + code.num_qubits))
+            acc += code.num_qubits
+        self.input_qubit_indices = [q[0] for q in self.qubit_indices]
 
+        self.ancilla = self.num_qubits #Ancilla is the last qubit of the circuit.
+        self._circuit = QuantumCircuit(self.num_qubits + self.num_ancillas)   
+
+    def encoder(self, qubit, set_stabilizer = False):
+        """
+        Add the encoder from the input qubit to its logical representation.
+        """
+        encoder = self.codes[qubit].encoder().to_gate()
+        encoder.name = f"Encoder{qubit}"
+        qc = self._circuit.compose(encoder, qubits = self.qubit_indices[qubit], inplace=False)
+
+        if set_stabilizer:
+            stabilizer_state = Clifford(qc)
+            self._circuit.set_stabilizer(stabilizer_state)
+        else:
+            self._circuit = qc
+    
     def x(self, qubit):
         """
-        Add Pauli X in between encoding and syndrome measurement.
+        Add logical X to logical qubit.
         """
-        self._circuit.x(qubit)
-
-    def y(self, qubit):
-        """
-        Add Pauli Y in between encoding and syndrome measurement.
-        """
-        self._circuit.y(qubit)
-
+        xl = self.codes[qubit].logical_X().to_gate()
+        xl.name = f"X_logical_{qubit}"
+        qubit_indices = self.qubit_indices[qubit]
+        self._circuit.compose(xl, qubits = qubit_indices, inplace=True)
+    
     def z(self, qubit):
         """
-        Add Pauli Z in between encoding and syndrome measurement.
+        Add logical Z to logical qubit.
         """
-        self._circuit.z(qubit)
+        zl = self.codes[qubit].logical_Z().to_gate()
+        zl.name = f"Z_logical_{qubit}"
+        qubit_indices = self.qubit_indices[qubit]
+        self._circuit.compose(zl, qubits = qubit_indices, inplace=True)
+    
+    def h(self, qubit):
+        """
+        Add logical H to logical qubit.
+        """
+        hl = self.codes[qubit].logical_H().to_gate()
+        hl.name = f"H_logical_{qubit}"
+        qubit_indices = self.qubit_indices[qubit]
+        self._circuit.compose(hl, qubits = qubit_indices, inplace=True)
+
+    def s(self, qubit):
+        """
+        Add logical S to logical qubit.
+        """
+        sl = self.codes[qubit].logical_S().to_gate()
+        sl.name = f"S_logical_{qubit}"
+        qubit_indices = self.qubit_indices[qubit]
+        self._circuit.compose(sl, qubits = qubit_indices, inplace=True)
+
+    def cx(self, control, target, keep_transversal = False):
+        """
+        Add a transversal logical CNOT between a control and target logical qubit.
+        """
+        cxl = self._logical_cx(control, target, keep_transversal).to_gate()
+        cxl.name = f"CX_logical_({control})->({target})"
+        self._circuit.compose(cxl, inplace=True)
+
+    def barrier(self):
+        "Apply a barrier in the circuit."
+        self._circuit.barrier()
+
+    def _logical_cx(self, control, target, keep_transversal):
+        """
+        Construct a logical CNOT gate between two logical qubits.
+        """
+        control_indices = self.qubit_indices[control]
+        target_indices = self.qubit_indices[target]
+        control_code = self.codes[control]
+        target_code = self.codes[target]
+
+        #Construct gates for acting on individual physical qubits depending on sizes of codes
+        #being acted between.
+        cx_logical = QuantumCircuit(2)
+        if control_code.n % 2 == 0 and target_code.n % 2 == 0:
+            cx_logical.h(1)
+            cx_logical.cz(1,0)
+            cx_logical.h(1)
+        if control_code.n % 2 == 1 and target_code.n % 2 == 0:
+            cx_logical.h(1)
+            cx_logical.cx(1,0)
+            cx_logical.h(1)
+        if control_code.n % 2 == 0 and target_code.n % 2 == 1:
+            cx_logical.cz(1,0)
+        if control_code.n % 2 == 1 and target_code.n % 2 == 1:
+            cx_logical.cx(1,0)
+
+        #Construct full transversal logical CNOT
+        cx_transversal = QuantumCircuit(control_code.num_qubits + target_code.num_qubits)
+        #The gate will look differently depending on the number of physical qubits for each logical qubit.
+        if control_code.num_qubits == target_code.num_qubits:
+            #Transverse implementation
+            for n in range(len(control_indices)):
+                cx_transversal.compose(cx_logical, qubits = [control_indices[n], target_indices[n]], inplace=True)
+        
+        if control_code.num_qubits < target_code.num_qubits:
+            #Each control qubit controls a group of the target.
+            num_target_qubits = target_code.num_qubits // control_code.num_qubits
+            for n in range(control_code.num_qubits):
+                for k in range(num_target_qubits):
+                    cx_transversal.compose(cx_logical, qubits = [control_indices[n], target_indices[num_target_qubits*n + k]], inplace=True)
+
+        if control_code.num_qubits > target_code.num_qubits:
+            #If an entangling gate is added per control qubit it will only achieve propagating errors from
+            #all control qubits without any benefit over simply adding an entangling gate to a single
+            #of the qubits. Both options are implemented to experiment with this.
+            num_control_qubits = control_code.num_qubits // target_code.num_qubits
+            for k in range(target_code.num_qubits):
+                for n in range(control_code.num_qubits):
+                    if not keep_transversal and n > 2:#and (n % 3 == 1 or n % 3 == 2):
+                        #Only add a single gate per target in this case.
+                        continue
+                    cx_transversal.compose(cx_logical, qubits = [control_indices[num_control_qubits*k + n], target_indices[k]], inplace=True)
+
+        return cx_transversal
+
+                
+
+
+        
+
+
+
+
 
     def get_circuit(self):
         """
         Returns the QuantumCircuit built using the Shor encoding.
         """
-        qc = self._circuit.copy()
-        qc.compose(self.sc.stabilizer_measurement_circuit(), inplace=True)
-        return qc
-    
-    def simulate_noiseless(self, shots = 1e3):
-        """
-        Run a simulation of the circuit using the Aer simulator. Returns the result object of the simulation.
-        """
-        qc = self.get_circuit()
-        result = self.aer.run(qc.decompose(), shots = shots).result()
-        return result
+        return self._circuit.copy()
