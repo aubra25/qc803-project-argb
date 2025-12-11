@@ -1,4 +1,4 @@
-from shor_code_package.shor_code import ShorQubit, ConcatenatedShorQubit
+from shor_code_package.shor_code import ShorQubit, ConcatenatedShorQubit, ShorCircuit
 import qiskit.quantum_info as qi
 from qiskit import QuantumCircuit, AncillaRegister, transpile
 from qiskit_aer import AerSimulator
@@ -50,7 +50,9 @@ class TestUtilities:
         zll =  "-"+zll if input_state == 1 else zll
         return [*stabilizers, zll]
     
-@pytest.mark.skip()
+RUN_ALL = True
+
+@pytest.mark.skipif(not RUN_ALL, reason="Testing")
 class TestShorQubit():
     #Assignment 1
     def test_encode_0_returns_0_logical_state(self):
@@ -195,7 +197,7 @@ class TestShorQubit():
         assert len(result.get_counts().keys()) == 1
         assert np.isclose(qi.state_fidelity(final_statevector, target), 1)
 
-@pytest.mark.skip()
+@pytest.mark.skipif(not RUN_ALL, reason="Testing")
 class TestConcanetatedShorQubit():
     #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state", [0, 1])
@@ -272,6 +274,7 @@ class TestConcanetatedShorQubit():
         #Assert
         assert target.equiv(final_stabilizer_state)
 
+pytest.mark.skipif(not RUN_ALL, reason="Testing")
 class TestLogicalGates:
     @pytest.mark.parametrize("n, input_state", [(n, input_state) for n in [1, 2] for input_state in [0, 1]])
     def test_logical_X(self, n, input_state):
@@ -319,10 +322,10 @@ class TestLogicalGates:
         #Assert
         assert target_stabilizer_state.equiv(test_stabilizer_state)
         
-    @pytest.mark.parametrize("input_state, repetitions, use_naive", [(input_state, repetitions, use_naive) for input_state in [0, 1] for repetitions in [1,2] for use_naive in [True, False]])
-    def test_logical_hadamard(self, input_state, repetitions, use_naive):
+    @pytest.mark.parametrize("input_state, repetitions, use_naive, n", [(input_state, repetitions, use_naive, n) for input_state in [0, 1] for repetitions in [1,2] for use_naive in [True, False] for n in [1,2]])
+    def test_logical_hadamard(self, input_state, repetitions, use_naive, n):
         #Arrange
-        csq = ConcatenatedShorQubit(1)
+        csq = ConcatenatedShorQubit(n)
         qc_target = QuantumCircuit(csq.num_qubits)
         if input_state == 1:
             qc_target.x(0)
@@ -350,10 +353,10 @@ class TestLogicalGates:
         #Assert
         assert target_stabilizer_state.equiv(test_stabilizer_state)
 
-    @pytest.mark.parametrize("input_state", [(input_state) for input_state in [0, 1]])
-    def test_logical_S(self, input_state):
+    @pytest.mark.parametrize("input_state, n", [(input_state, n) for input_state in [0, 1] for n in [0,1]])
+    def test_logical_S(self, input_state, n):
         #Arrange
-        csq = ConcatenatedShorQubit(1)
+        csq = ConcatenatedShorQubit(n)
         qc_target = QuantumCircuit(csq.num_qubits)
         if input_state == 1:
             qc_target.x(0)
@@ -380,6 +383,39 @@ class TestLogicalGates:
         #Assert
         assert target_stabilizer_state.equiv(test_stabilizer_state)
 
-        
+@pytest.mark.skipif(RUN_ALL, reason = "Testing")
+class TestShorCircuit:
+    @pytest.mark.parametrize("n1, n2, keep_transversal", [(n1, n2, keep_transversal) for n1 in [0,1,2] for n2 in [0,1,2] for keep_transversal in [False, True]])
+    def test_create_encoded_bell_pair(self, n1, n2, keep_transversal):
+        """
+        This test implicitly tests all logical gates.
+        """
+        #Arrange
+        sc = ShorCircuit([n1,n2])
+        inputs = sc.input_qubit_indices
+        sc.encoder(0)
+        sc.encoder(1)
+
+        #Target is encoding of a physical Bell pair
+        state_prep = QuantumCircuit(sc.num_qubits)
+        state_prep.h(inputs[0])
+        state_prep.cx(inputs[0],inputs[1])
+        target_qc = sc.get_circuit().compose(state_prep, front=True)
+        target = qi.StabilizerState(target_qc)
+
+        #Construct circuit of logical gates to construct logical Bell pair of logical states
+        sc.h(0)
+        sc.cx(0,1, keep_transversal=keep_transversal)
+        sc.save_stabilizer()
+
+        aer = AerSimulator(method='stabilizer')
+
+        #Act
+        result = aer.run(sc.get_circuit().decompose(), shots = 1).result()
+        final_stabilizer = result.data()['stabilizer']
+
+        #Assert
+        assert target.equiv(final_stabilizer)
+    
 
     
