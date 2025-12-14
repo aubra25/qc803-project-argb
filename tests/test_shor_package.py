@@ -164,15 +164,15 @@ class TestShorQubit():
         assert list(result.keys())[0] == syndrome #Bit order is reversed in qiskit
 
     #Assignment 5
-    @pytest.mark.parametrize("qubit, pauli_error, target", [(qubit, pauli_error, target) 
+    @pytest.mark.parametrize("qubit, pauli_error, input_state", [(qubit, pauli_error, input_state) 
                                                     for qubit in range(9) 
-                                                    for pauli_error in ["Y"]#, "Z", "X"] 
-                                                    for target in [0, 1]])
-    def test_single_pauli_errors_are_corrected(self, qubit, pauli_error, target):
+                                                    for pauli_error in ["X","Z","Y"]#, "Z", "X"] 
+                                                    for input_state in [0, 1]])
+    def test_single_pauli_errors_are_corrected(self, qubit, pauli_error, input_state):
         #Arrange
         sq = ConcatenatedShorQubit(1)
         qc = QuantumCircuit(9 + 1) #Nine physical qubits, one ancilla
-        if target == 1:
+        if input_state == 1:
             qc.x(0)
         qc.compose(sq.encoder(), inplace = True)
 
@@ -187,7 +187,7 @@ class TestShorQubit():
         qc.compose(sq.syndrome_correction_circuit(), inplace = True)
         qc.save_density_matrix(range(9), label="p")
 
-        target = TestUtilities.logical_0() if target == 0 else TestUtilities.logical_1()
+        input_state = TestUtilities.logical_0() if input_state == 0 else TestUtilities.logical_1()
 
         #Act
         result = TestUtilities.aer_simulation(qc, shots=1)
@@ -195,7 +195,7 @@ class TestShorQubit():
 
         #Assert
         assert len(result.get_counts().keys()) == 1
-        assert np.isclose(qi.state_fidelity(final_statevector, target), 1)
+        assert np.isclose(qi.state_fidelity(final_statevector, input_state), 1)
 
 @pytest.mark.skipif(not RUN_ALL, reason="Testing")
 class TestConcanetatedShorQubit():
@@ -261,6 +261,33 @@ class TestConcanetatedShorQubit():
             for n in range(9):
                 qc.y(n + 9*i) #add phase flips in separate groups.
         qc.compose(csq.syndrome_correction_circuit(), inplace=True)
+        qc.save_stabilizer()
+        
+        #Simulator
+        aer = AerSimulator(method="stabilizer")
+        transpiled_qc = transpile(qc, aer)
+
+        #Act
+        result = aer.run(transpiled_qc, shots = 1).result()
+        final_stabilizer_state = result.data()['stabilizer']
+
+        #Assert
+        assert target.equiv(final_stabilizer_state)
+
+    @pytest.mark.parametrize("num_measurements, remeasure_ancilla", [(num_measurements, remeasure_ancilla) 
+                                        for num_measurements in [3, 5, 7] 
+                                        for remeasure_ancilla in [False, True]])
+    def test_multi_measurement_methods(self, num_measurements, remeasure_ancilla):
+        #Arrange
+        target = qi.StabilizerState.from_stabilizer_list(TestUtilities.logical_state_stabilizers(0, include_ancilla=True))
+
+        #Circuit
+        csq = ConcatenatedShorQubit(2)
+        qc = QuantumCircuit(csq.num_qubits + csq.num_ancillas)
+        qc.compose(csq.encoder(), qubits = range(csq.num_qubits), inplace=True)
+
+        qc.y(0) #add phase flip.
+        qc.compose(csq.syndrome_correction_circuit(num_measurements=num_measurements, remeasure_same_qubit=remeasure_ancilla), inplace=True)
         qc.save_stabilizer()
         
         #Simulator
@@ -383,7 +410,7 @@ class TestLogicalGates:
         #Assert
         assert target_stabilizer_state.equiv(test_stabilizer_state)
 
-@pytest.mark.skipif(RUN_ALL, reason = "Testing")
+@pytest.mark.skipif(not RUN_ALL, reason = "Testing")
 class TestShorCircuit:
     @pytest.mark.parametrize("n1, n2, keep_transversal", [(n1, n2, keep_transversal) for n1 in [0,1,2] for n2 in [0,1,2] for keep_transversal in [False, True]])
     def test_create_encoded_bell_pair(self, n1, n2, keep_transversal):
@@ -393,8 +420,6 @@ class TestShorCircuit:
         #Arrange
         sc = ShorCircuit([n1,n2])
         inputs = sc.input_qubit_indices
-        sc.encoder(0)
-        sc.encoder(1)
 
         #Target is encoding of a physical Bell pair
         state_prep = QuantumCircuit(sc.num_qubits)
