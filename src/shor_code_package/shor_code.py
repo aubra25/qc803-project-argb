@@ -1,4 +1,4 @@
-from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister
+from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister, QuantumRegister
 from qiskit.quantum_info import Operator, Clifford
 import numpy as np
 from qiskit_aer import AerSimulator
@@ -177,7 +177,7 @@ class ConcatenatedShorQubit:
         self.num_qubits = 9**n #physical qubits
         self.num_ancillas = 1
         self._inner_code = ConcatenatedShorQubit(n - 1) if n >= 1 else None
-        self._cache = {'x': None, 'z': None, 'h': None, 's': None, 'encoder': None, 'error_correction': None}
+        self._cache = dict()
 
     def encoder(self):
         """
@@ -185,7 +185,7 @@ class ConcatenatedShorQubit:
         The qubit whose state should be encoded in the concatenated Shor code has index 0.
         """
         #Cache lookup:
-        cached_gate = self._cache['encoder']
+        cached_gate = self._cache.get('encoder', None)
         if cached_gate is not None:
             return cached_gate
 
@@ -215,23 +215,31 @@ class ConcatenatedShorQubit:
         self._cache['encoder'] = qc
         return qc
     
-    def syndrome_correction_circuit(self, correct_syndromes = True, num_measurements = 1, remeasure_same_qubit = True):
+    def syndrome_correction_circuit(self, correct_syndromes = True, num_measurements = 1, remeasure_same_qubit = True, subgroup = None):
         """
         Constructs the circuit for measuring syndromes and correcting the errors.
         Classical registers behave badly with recursion, so this is implemented
         more imperatively.
         """    
         #Cache lookup:
-        cached_gate = self._cache['error_correction']
-        if cached_gate is not None:
+        cached_gate = self._cache.get('error_correction', None)
+        if cached_gate is not None and subgroup is not None:
             return cached_gate
         
         #Initialize circuit and get stabilizers and recovering actions
         qc = QuantumCircuit(self.num_qubits + self.num_ancillas)
         stabilizer_circuits = self.get_stabilizers(True)[::-1]
         recovering_circuits = self.get_recovering_circuits(True)[::-1]
+
         classical_register_bits = ClassicalRegister(len(stabilizer_circuits)*num_measurements)
         qc.add_register(classical_register_bits)
+
+        #If only correcting errors on the nine underlying qubits.
+        if subgroup is not None:
+            num_stabilizers_per_group = len(stabilizer_circuits)//10
+            num_recovery_circuits_per_group = len(recovering_circuits)//10
+            stabilizer_circuits = stabilizer_circuits[:-8][subgroup*num_stabilizers_per_group:(subgroup+1)*num_stabilizers_per_group]
+            recovering_circuits = recovering_circuits[:-12][subgroup*num_recovery_circuits_per_group:(subgroup+1)*num_recovery_circuits_per_group]
 
         ancilla = self.num_qubits #Ancilla is the last qubit.
 
@@ -271,7 +279,8 @@ class ConcatenatedShorQubit:
                     with qc.if_test(expressions[1]):
                         qc.compose(recovering_circuits[3*n + 2], inplace = True)    
         
-        self._cache['error_correction'] = qc
+        if subgroup is None:
+            self._cache['error_correction'] = qc
         return qc
     
     def _get_classical_register_majority_expression(self, register):
@@ -301,7 +310,7 @@ class ConcatenatedShorQubit:
         The logical X operation for this codes logical qubit representation.
         """
         #Cache lookup:
-        cached_gate = self._cache['x']
+        cached_gate = self._cache.get('x', None)
         if cached_gate is not None:
             return cached_gate
         
@@ -327,7 +336,7 @@ class ConcatenatedShorQubit:
         The logical Z operation for this codes logical qubit representation.
         """
         #Cache lookup:
-        cached_gate = self._cache['z']
+        cached_gate = self._cache.get('z', None)
         if cached_gate is not None:
             return cached_gate
         
@@ -348,12 +357,12 @@ class ConcatenatedShorQubit:
         self._cache['z'] = qc
         return qc
     
-    def logical_H(self, use_naive = False):
+    def logical_H(self, use_naive = False, error_correct = False):
         """
         The logical H operation. If use_naive obtained by naively conjugating H on the input qubit with the encoder unitary.
         """
         #Cache lookup:
-        cached_gate = self._cache['h']
+        cached_gate = self._cache.get(f'h{error_correct}', None)
         if cached_gate is not None:
             return cached_gate
 
@@ -368,7 +377,6 @@ class ConcatenatedShorQubit:
             h = 1/np.sqrt(2)*(Operator.from_label(6*"I" + 3*"X") + Operator.from_label("IIZ"*3))
         else:
             h = 1/np.sqrt(2)*(Operator.from_label(9*"X") + Operator.from_label(9*"Z"))
-
         #For using in stabilizer circuits, convert operation to a Clifford gate
         #It is not trivial that the logical H gate would be a Clifford operation but it
         #turns out that it is the case!
@@ -379,7 +387,7 @@ class ConcatenatedShorQubit:
         else:
             qc = self._construct_logical_circuit(h_clifford.to_circuit())
         
-        self._cache['h'] = qc
+        self._cache[f'h{error_correct}'] = qc
         return qc
                 
     def logical_S(self):
@@ -387,7 +395,7 @@ class ConcatenatedShorQubit:
         Create the logical phase gate for the code.
         """
         #Cache lookup:
-        cached_gate = self._cache['s']
+        cached_gate = self._cache.get(f's', None)
         if cached_gate is not None:
             return cached_gate
         
@@ -407,9 +415,9 @@ class ConcatenatedShorQubit:
         if self.n == 1:
             qc = h_clifford.to_circuit()
         else:
-            qc = self._construct_logical_circuit(h_clifford.to_circuit())
+            qc = self._construct_logical_circuit(h_clifford.to_circuit(), error_correct)
 
-        self._cache['s']
+        self._cache[f's'] = qc
         return qc
 
     def _construct_logical_circuit(self, qc):
@@ -556,7 +564,7 @@ class ShorCircuit:
         if auto_encode:
             for q in range(self.num_logical_qubits):
                 self.encoder(q)   
-        self._cache = dict([(f"{control}{target}", None) for control in range(len(qubit_code_depths)) for target in range(len(qubit_code_depths))])
+        self._cache = dict()
 
     def encoder(self, qubit):
         """
@@ -635,11 +643,11 @@ class ShorCircuit:
         cxl = self._logical_cx(control, target, keep_transversal)
         self._circuit.compose(cxl, inplace=True)
 
-    def error_correct(self, qubit):
+    def error_correct(self, qubit, subgroup = None):
         """
         Perform error correction on the qubit.
         """
-        error_correction_circuit = self.codes[qubit].syndrome_correction_circuit()
+        error_correction_circuit = self.codes[qubit].syndrome_correction_circuit(subgroup=subgroup)
         error_correction_circuit.name = f"Error_correct_{qubit}"
         qubit_indices = self.qubit_indices[qubit]
         self._circuit.compose(error_correction_circuit, qubits = [*qubit_indices, self.ancilla], inplace=True) 
@@ -649,7 +657,7 @@ class ShorCircuit:
         Construct a logical CNOT gate between two logical qubits.
         """
         #Cache lookup:
-        cached_gate = self._cache[f'{control}{target}']
+        cached_gate = self._cache.get(f'{control}{target}', None)
         if cached_gate is not None:
             return cached_gate
 
