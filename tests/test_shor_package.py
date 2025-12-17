@@ -412,8 +412,8 @@ class TestLogicalGates:
 
 @pytest.mark.skipif(not RUN_ALL, reason = "Testing")
 class TestShorCircuit:
-    @pytest.mark.parametrize("n1, n2, keep_transversal", [(n1, n2, keep_transversal) for n1 in [0,1,2] for n2 in [0,1,2] for keep_transversal in [False, True]])
-    def test_create_encoded_bell_pair(self, n1, n2, keep_transversal):
+    @pytest.mark.parametrize("n1, n2, keep_transversal, error_correct", [(n1, n2, keep_transversal, error_correct) for n1 in [0,1,2] for n2 in [0,1,2] for keep_transversal in [False, True] for error_correct in [False, True]])
+    def test_create_encoded_bell_pair(self, n1, n2, keep_transversal, error_correct):
         """
         This test implicitly tests all logical gates.
         """
@@ -429,7 +429,7 @@ class TestShorCircuit:
         target = qi.StabilizerState(target_qc)
 
         #Construct circuit of logical gates to construct logical Bell pair of logical states
-        sc.h(0)
+        sc.h(0, intermediate_error_correction=error_correct)
         sc.cx(0,1, keep_transversal=keep_transversal)
         sc.save_stabilizer()
 
