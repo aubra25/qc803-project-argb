@@ -1,6 +1,6 @@
 from shor_code_package.shor_code import ShorQubit, ConcatenatedShorQubit, ShorCircuit
 import qiskit.quantum_info as qi
-from qiskit import QuantumCircuit, AncillaRegister, transpile
+from qiskit import QuantumCircuit, AncillaRegister, transpile, generate_preset_pass_manager
 from qiskit_aer import AerSimulator
 from qiskit.circuit.library import HGate
 import numpy as np
@@ -434,9 +434,11 @@ class TestShorCircuit:
         sc.save_stabilizer()
 
         aer = AerSimulator(method='stabilizer')
+        pass_manager = generate_preset_pass_manager(1, aer)
+        tqc = pass_manager.run(sc.get_circuit())
 
         #Act
-        result = aer.run(sc.get_circuit().decompose(), shots = 1).result()
+        result = aer.run(tqc, shots = 1).result()
         final_stabilizer = result.data()['stabilizer']
 
         #Assert

@@ -3,6 +3,7 @@ from qiskit.quantum_info import Operator, Clifford
 import numpy as np
 from qiskit_aer import AerSimulator
 from qiskit.circuit.classical import expr
+from qiskit.circuit import Instruction, Gate, CircuitInstruction
 
 class ShorQubit():
     def __init__(self):
@@ -215,7 +216,7 @@ class ConcatenatedShorQubit:
         self._cache['encoder'] = qc
         return qc
     
-    def syndrome_correction_circuit(self, correct_syndromes = True, num_measurements = 1, remeasure_same_qubit = True, subgroup = None):
+    def syndrome_correction_circuit(self, correct_syndromes = True, num_measurements = 1, remeasure_same_qubit = True, _classical_register = None):
         """
         Constructs the circuit for measuring syndromes and correcting the errors.
         Classical registers behave badly with recursion, so this is implemented
@@ -223,7 +224,7 @@ class ConcatenatedShorQubit:
         """    
         #Cache lookup:
         cached_gate = self._cache.get('error_correction', None)
-        if cached_gate is not None and subgroup is not None:
+        if cached_gate is not None:
             return cached_gate
         
         #Initialize circuit and get stabilizers and recovering actions
@@ -231,15 +232,8 @@ class ConcatenatedShorQubit:
         stabilizer_circuits = self.get_stabilizers(True)[::-1]
         recovering_circuits = self.get_recovering_circuits(True)[::-1]
 
-        classical_register_bits = ClassicalRegister(len(stabilizer_circuits)*num_measurements)
+        classical_register_bits = ClassicalRegister(len(stabilizer_circuits)*num_measurements) if _classical_register is None else _classical_register
         qc.add_register(classical_register_bits)
-
-        #If only correcting errors on the nine underlying qubits.
-        if subgroup is not None:
-            num_stabilizers_per_group = len(stabilizer_circuits)//10
-            num_recovery_circuits_per_group = len(recovering_circuits)//10
-            stabilizer_circuits = stabilizer_circuits[:-8][subgroup*num_stabilizers_per_group:(subgroup+1)*num_stabilizers_per_group]
-            recovering_circuits = recovering_circuits[:-12][subgroup*num_recovery_circuits_per_group:(subgroup+1)*num_recovery_circuits_per_group]
 
         ancilla = self.num_qubits #Ancilla is the last qubit.
 
@@ -279,8 +273,7 @@ class ConcatenatedShorQubit:
                     with qc.if_test(expressions[1]):
                         qc.compose(recovering_circuits[3*n + 2], inplace = True)    
         
-        if subgroup is None:
-            self._cache['error_correction'] = qc
+        self._cache['error_correction'] = qc
         return qc
     
     def _get_classical_register_majority_expression(self, register):
@@ -357,12 +350,12 @@ class ConcatenatedShorQubit:
         self._cache['z'] = qc
         return qc
     
-    def logical_H(self, use_naive = False, error_correct = False):
+    def logical_H(self, use_naive = False, intermediate_error_correction = False):
         """
         The logical H operation. If use_naive obtained by naively conjugating H on the input qubit with the encoder unitary.
         """
         #Cache lookup:
-        cached_gate = self._cache.get(f'h{error_correct}', None)
+        cached_gate = self._cache.get(f'h{intermediate_error_correction}', None)
         if cached_gate is not None:
             return cached_gate
 
@@ -385,17 +378,17 @@ class ConcatenatedShorQubit:
         if self.n == 1:
             qc = h_clifford.to_circuit()
         else:
-            qc = self._construct_logical_circuit(h_clifford.to_circuit())
+            qc = self._construct_logical_circuit(h_clifford.to_circuit(), intermediate_error_correction)
         
-        self._cache[f'h{error_correct}'] = qc
+        self._cache[f'h{intermediate_error_correction}'] = qc
         return qc
                 
-    def logical_S(self):
+    def logical_S(self, intermediate_error_correction = False):
         """
         Create the logical phase gate for the code.
         """
         #Cache lookup:
-        cached_gate = self._cache.get(f's', None)
+        cached_gate = self._cache.get(f's{intermediate_error_correction}', None)
         if cached_gate is not None:
             return cached_gate
         
@@ -415,12 +408,12 @@ class ConcatenatedShorQubit:
         if self.n == 1:
             qc = h_clifford.to_circuit()
         else:
-            qc = self._construct_logical_circuit(h_clifford.to_circuit(), error_correct)
+            qc = self._construct_logical_circuit(h_clifford.to_circuit(), intermediate_error_correction)
 
-        self._cache[f's'] = qc
+        self._cache[f's{intermediate_error_correction}'] = qc
         return qc
 
-    def _construct_logical_circuit(self, qc):
+    def _construct_logical_circuit(self, qc, error_correct):
         """
         Logical gates can be expressed as circuits of logical gates of the inner codes. This
         function takes a 9 logical qubit Clifford circuit and converts it to a circuit on the
@@ -432,6 +425,9 @@ class ConcatenatedShorQubit:
 
         shor_circuit = ShorCircuit([self.n - 1 for _ in range(9)], include_ancilla = False, auto_encode=False)
         for instruction in instructions:
+            if error_correct:
+                for qubit in instruction[1]:
+                    shor_circuit.error_correct(qubit)
             match instruction[0]:
                 case "s":
                     shor_circuit.s(instruction[1][0])
@@ -447,7 +443,7 @@ class ConcatenatedShorQubit:
                 case "z":
                     shor_circuit.z(instruction[1][0])
         
-        return shor_circuit.get_circuit().decompose()
+        return shor_circuit.get_circuit(transpile = False).decompose()
 
     def get_stabilizers(self, include_inner_stabilizers = False):
         """
@@ -548,6 +544,8 @@ class ShorCircuit:
         self.num_logical_qubits = len(self.codes)
         self.num_qubits = sum([c.num_qubits for c in self.codes])
         self.num_ancillas = 1 if include_ancilla else 0
+        self.max_n = max([code.n for code in self.codes])
+        self.num_classical_bits = sum([8*(9**k) for k in range(self.max_n)])
 
         #Save indices of physical qubits for each logical qubit
         acc = 0
@@ -608,20 +606,20 @@ class ShorCircuit:
         qubit_indices = self.qubit_indices[qubit]
         self._circuit.compose(zl, qubits = qubit_indices, inplace=True)
     
-    def h(self, qubit):
+    def h(self, qubit, intermediate_error_correction = True):
         """
         Add logical H to logical qubit.
         """
-        hl = self.codes[qubit].logical_H().to_gate()
+        hl = self.codes[qubit].logical_H(intermediate_error_correction=intermediate_error_correction).to_gate()
         hl.name = f"H_logical_{qubit}"
         qubit_indices = self.qubit_indices[qubit]
         self._circuit.compose(hl, qubits = qubit_indices, inplace=True)
 
-    def s(self, qubit):
+    def s(self, qubit, intermediate_error_correction = True):
         """
         Add logical S to logical qubit.
         """
-        sl = self.codes[qubit].logical_S().to_gate()
+        sl = self.codes[qubit].logical_S(intermediate_error_correction=intermediate_error_correction).to_gate()
         sl.name = f"S_logical_{qubit}"
         qubit_indices = self.qubit_indices[qubit]
         self._circuit.compose(sl, qubits = qubit_indices, inplace=True)
@@ -643,14 +641,20 @@ class ShorCircuit:
         cxl = self._logical_cx(control, target, keep_transversal)
         self._circuit.compose(cxl, inplace=True)
 
-    def error_correct(self, qubit, subgroup = None):
+    def error_correct(self, qubit, subgroup = None, legacy=False):
         """
         Perform error correction on the qubit.
         """
-        error_correction_circuit = self.codes[qubit].syndrome_correction_circuit(subgroup=subgroup)
-        error_correction_circuit.name = f"Error_correct_{qubit}"
-        qubit_indices = self.qubit_indices[qubit]
-        self._circuit.compose(error_correction_circuit, qubits = [*qubit_indices, self.ancilla], inplace=True) 
+        if legacy:
+            error_correction_circuit = self.codes[qubit].syndrome_correction_circuit(subgroup=subgroup)
+            error_correction_circuit.name = f"Error_correct_{qubit}"
+            qubit_indices = self.qubit_indices[qubit]
+            self._circuit.compose(error_correction_circuit, qubits = [*qubit_indices, self.ancilla], inplace=True) 
+        else:
+            code = self.codes[qubit]
+            qubit_indices = self.qubit_indices[qubit]
+            self._circuit.compose(ErrorCorrect(code.num_qubits, f"Error_correct_{code.n}"), qubits=qubit_indices, inplace=True)
+
 
     def _logical_cx(self, control, target, keep_transversal):
         """
@@ -743,8 +747,61 @@ class ShorCircuit:
         "Apply a barrier in the circuit."
         self._circuit.barrier()
 
-    def get_circuit(self):
+    def draw(self, **kwargs):
+        """
+        Draw the ShorCircuit.
+        """
+        return self._circuit.draw(**kwargs)
+    
+    def if_test(self, **kwargs):
+        """
+        Delegates to if_test method of the QuantumCircuit class.
+        """
+        return self._circuit.if_test(**kwargs)
+
+    def get_circuit(self, transpile = True, classical_register = None):
         """
         Returns the QuantumCircuit built using the Shor encoding.
         """
-        return self._circuit.copy()
+        return self._transpile(classical_register) if transpile else self._circuit.copy()
+
+    def _transpile(self, classical_register = None):
+        """
+        Replaces placeholder Error Correct instructions with actual error correction circuits.
+        If a classical register is passed, this will be used for syndrome measurements throughout.
+        """
+        original_circuit = self._circuit.copy()
+        original_circuit = original_circuit.decompose()
+        classical_register = ClassicalRegister(self.num_classical_bits) if classical_register is None else classical_register
+
+        error_corrections = []
+        for index, circuit_instruction in enumerate(original_circuit._data):
+            if circuit_instruction.name == "ErrorCorrect":
+                qubits = circuit_instruction.qubits
+                n = int(circuit_instruction.label[-1]) #Last character is depth
+                error_corrections.append((index, n, qubits))
+        
+        previous_index = -1
+        final_index = len(original_circuit._data)
+        self._circuit.clear() #Reconstruct the circuit with error correction inserted.
+
+        for error_correction in [*error_corrections, (final_index,None,None)]:
+            index, n, qubits = error_correction
+            for instruction in original_circuit._data[previous_index + 1 : index]: #Skip the ErrorCorrect instruction
+                self._circuit._data.append(instruction)
+            previous_index = index
+            if index == final_index:
+                break
+            self._circuit.compose(ConcatenatedShorQubit(n).syndrome_correction_circuit(_classical_register=classical_register), qubits = [*qubits, self.ancilla], inplace=True)
+
+        return self._circuit
+
+
+
+class ErrorCorrect(Gate):
+    def __init__(self, num_qubits, label):
+        self.name = "ErrorCorrect"
+        super().__init__(self.name, num_qubits, [], label = label)
+
+    def inverse(self):
+        return ErrorCorrect(self.name, self.num_qubits)
