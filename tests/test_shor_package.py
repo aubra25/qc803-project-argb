@@ -1,8 +1,7 @@
-from shor_code_package.shor_code import ShorQubit, ConcatenatedShorQubit, ShorCircuit
+from shor_code_package.shor_code import ConcatenatedShorQubit, ShorCircuit
 import qiskit.quantum_info as qi
 from qiskit import QuantumCircuit, AncillaRegister, transpile, generate_preset_pass_manager
 from qiskit_aer import AerSimulator
-from qiskit.circuit.library import HGate
 import numpy as np
 import pytest
 
@@ -30,7 +29,7 @@ class TestUtilities:
     
     def logical_state_stabilizers(input_state, include_ancilla = False):
         #The stabilizers are like the ones for the ordinary Shor code for each
-        #of the 9 qubit groupings plus an addtional set of stabilizers which are translations of the originals of
+        #of the 9 qubit groupings plus an addtional set of stabilizers which are translations of the originals
         #using the logical operators of the inner code.
         shor_code_stabilizers = ["XXXXXXIII", "IIIXXXXXX", "ZZIIIIIII", "IZZIIIIII", "IIIZZIIII", "IIIIZZIII", "IIIIIIZZI", "IIIIIIIZZ"]
         zl = "X"*9
@@ -54,10 +53,9 @@ RUN_ALL = True
 
 @pytest.mark.skipif(not RUN_ALL, reason="Testing")
 class TestShorQubit():
-    #Assignment 1
     def test_encode_0_returns_0_logical_state(self):
         #Arrange
-        encoder = ShorQubit().encoder()
+        encoder = ConcatenatedShorQubit(1).encoder()
         target = TestUtilities.logical_0()
         
         #Act
@@ -71,7 +69,7 @@ class TestShorQubit():
         target = TestUtilities.logical_1()
         
         #Ensure a |1> is the input to the encoder
-        qc = TestUtilities.ket_1_circuit().compose(ShorQubit().encoder())
+        qc = TestUtilities.ket_1_circuit().compose(ConcatenatedShorQubit(1).encoder())
 
         #Act
         final_state = qi.Statevector.from_instruction(qc)
@@ -79,7 +77,6 @@ class TestShorQubit():
         #Assert
         assert np.isclose(qi.state_fidelity(final_state, target), 1)
 
-    #Assignment 2
     @pytest.mark.parametrize("stabilizer", ConcatenatedShorQubit(1).get_stabilizers())
     def test_logical_0_is_unaffected_by_stabilisers(self, stabilizer):
         #Arrange 
@@ -106,7 +103,6 @@ class TestShorQubit():
         #Assert
         assert np.isclose(qi.state_fidelity(final_state, target), 1)
 
-    #Assignement 3 and 4
     @pytest.mark.parametrize("qubit, syndrome", 
                              [
                                  (0,"00100000"),
@@ -163,10 +159,9 @@ class TestShorQubit():
         assert len(result.keys()) == 1
         assert list(result.keys())[0] == syndrome #Bit order is reversed in qiskit
 
-    #Assignment 5
     @pytest.mark.parametrize("qubit, pauli_error, input_state", [(qubit, pauli_error, input_state) 
                                                     for qubit in range(9) 
-                                                    for pauli_error in ["X","Z","Y"]#, "Z", "X"] 
+                                                    for pauli_error in ["X","Z","Y"]
                                                     for input_state in [0, 1]])
     def test_single_pauli_errors_are_corrected(self, qubit, pauli_error, input_state):
         #Arrange
@@ -199,7 +194,6 @@ class TestShorQubit():
 
 @pytest.mark.skipif(not RUN_ALL, reason="Testing")
 class TestConcanetatedShorQubit():
-    #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state", [0, 1])
     def test_encoder_produces_logical_states(self, input_state):
         #Arrange
@@ -219,7 +213,6 @@ class TestConcanetatedShorQubit():
         #Assert
         assert encoded_logical_state.equiv(target)
 
-    #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state, stabilizer", [(input_state, stabilizer) 
                                             for input_state in [0, 1] 
                                             for stabilizer in ConcatenatedShorQubit(2).get_stabilizers()])
@@ -242,7 +235,6 @@ class TestConcanetatedShorQubit():
         #Assert
         assert encoded_logical_0.equiv(target)
 
-    #@pytest.mark.skip()
     @pytest.mark.parametrize("input_state, num_ys", [(input_state, num_ys) 
                                         for input_state in [0, 1] 
                                         for num_ys in [1,2,3]])
@@ -415,7 +407,8 @@ class TestShorCircuit:
     @pytest.mark.parametrize("n1, n2, keep_transversal, error_correct", [(n1, n2, keep_transversal, error_correct) for n1 in [0,1,2] for n2 in [0,1,2] for keep_transversal in [False, True] for error_correct in [False, True]])
     def test_create_encoded_bell_pair(self, n1, n2, keep_transversal, error_correct):
         """
-        This test implicitly tests all logical gates.
+        This test implicitly tests all logical gates since the n=2 Hadamard gate uses all logical gates of
+        the n=1 Concatenated Shor code.
         """
         #Arrange
         sc = ShorCircuit([n1,n2])
@@ -443,6 +436,4 @@ class TestShorCircuit:
 
         #Assert
         assert target.equiv(final_stabilizer)
-    
-
     

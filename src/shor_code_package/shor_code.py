@@ -1,175 +1,13 @@
-from qiskit import QuantumCircuit, AncillaRegister, ClassicalRegister, QuantumRegister
+from qiskit import QuantumCircuit, ClassicalRegister
 from qiskit.quantum_info import Operator, Clifford
 import numpy as np
-from qiskit_aer import AerSimulator
 from qiskit.circuit.classical import expr
-from qiskit.circuit import Instruction, Gate, CircuitInstruction
-
-class ShorQubit():
-    def __init__(self):
-        """
-        Initialize the ShorCode instance.
-        """
-        self.num_qubits = 9 + 8
-
-    def circuit(self):
-        """
-        Returns quantum circuit for initializing a state in the Shor code, measuring stabilisers, and correcting
-        the syndromes.
-        """
-        #Initialize circuit
-        n_qubits = 9
-        n_ancillas = 8
-        qc = QuantumCircuit(n_qubits + n_ancillas)
-        
-        #Compose components
-        qc.compose(self.encoder(), inplace = True)
-        qc.barrier()
-        qc.compose(self.syndrome_correction_circuit(), clbits=range(8), inplace = True)
-
-        return qc
-
-
-    def encoder(self):
-        """
-        Create the encoding circuit of a single (logical) qubit to 9 physical qubits.
-        The qubit whose state should be encoded in the Shor code has index 0.
-        """
-        #Initialize the circuit.
-        qc = QuantumCircuit(9)
-
-        #Outer code - 3 qubit bit flip code
-        qc.cx(0, 3)
-        qc.cx(0, 6)
-        qc.barrier()
-
-        #Inner code - 3 qubit phase flip code
-        for n in [0, 3, 6]:
-            qc.h(n)
-            qc.cx(n, n + 1)
-            qc.cx(n, n + 2)
-    
-        return qc
-    
-    def syndrome_correction_circuit(self, correct_syndromes = True):
-        """
-        Return a QuantumCircuit measuring the stabilizers of the Shor code.
-        
-        Each stabilizer has eigenvalues +1 or -1, so Quantum Phase Estimation
-        can be utilized with a single ancilla per stabilizer to get the
-        measurement outcome of the stabilizer non-destructively.
-        """
-        #Initialize circuit
-        stabilizers = self.get_stabilizers()
-        qc = QuantumCircuit(9)
-        ancilla_register = AncillaRegister(1)
-        qc.add_register(ancilla_register)
-
-        #Register for measuring Z stabilizer
-        z_register = ClassicalRegister(2, name = 'Z stabilizer measurements')
-        qc.add_register(z_register)
-
-        #Registers for measuring X stabilizers
-        x_registers = []
-        for i in range(3):
-            x_register = ClassicalRegister(2, name = f'X stabilizer measurements {i}')
-            qc.add_register(x_register)
-            x_registers.append(x_register)
-
-        #Create combined classical register
-        combined_register = np.concatenate((z_register, np.array(x_registers).flatten()))
-
-        #Add phase estimation for each stabilizer
-        ancilla = ancilla_register[0]
-        for classic_bit, stabilizer in zip(combined_register, stabilizers):
-            cu = stabilizer.to_gate().control(1)
-            qc.h(ancilla)
-            qc.append(cu, [ancilla, *range(9)])
-            qc.h(ancilla)
-            qc.measure(ancilla, classic_bit)
-
-            #Reset the ancilla for use in another round of error correction
-            qc.reset(ancilla)
-
-        #For testing purposes, correction of the syndromes can be disabled
-        if correct_syndromes:
-            qc.barrier()
-            qc = self._add_syndrome_correction(qc, z_register, x_registers)
-
-        return qc
-    
-    def _add_syndrome_correction(self, qc, z_register, x_registers):
-        """
-        Adds syndrome corretion to qc depending on the measured syndrome.
-        """
-        #Configure restoring action depending on syndrome
-        x_corrections = [
-            (0b01, 0),
-            (0b11, 1),
-            (0b10, 2),
-        ]
-        for (group, x_register) in enumerate(x_registers): #Loop through each grouping of three qubits
-            for (syndrome, qubit) in x_corrections:
-                with qc.if_test((x_register, syndrome)):
-                    qc.x(qubit + 3*group)
-
-        z_corrections = [
-            (0b01, [0,1,2]),
-            (0b11, [3,4,5]),
-            (0b10, [6,7,8])
-            ]
-        for (syndrome, qubits) in z_corrections:
-            with qc.if_test((z_register, syndrome)):
-                for qubit in qubits:
-                    qc.z(qubit)
-    
-        return qc
-
-
-    def get_stabilizers(self):
-        """
-        Return a list of QuantumCircuits that implement the stabilizers of the Shor code.
-        """
-        stabilizer_circuits = []
-        #The Shor Code has 8 stabilizers. First the stabilizers involving X are constructed.
-        for n in [0, 3]:
-            qc = QuantumCircuit(9, name=f"X_{n}X_{n+1}X_{n+2}X_{n+3}X_{n+4}X_{n+5}")
-            for q in range(n, n + 6):
-                qc.x(q)
-            stabilizer_circuits.append(qc)
-        
-        #The stabilizers involving Z.
-        for n in [0, 1, 3, 4, 6, 7]:
-            qc = QuantumCircuit(9, name = f"Z_{n}Z_{n+1}")
-            qc.z(n)
-            qc.z(n+1)
-            stabilizer_circuits.append(qc)
-        
-        return stabilizer_circuits
-    
-    def logical_X(self):
-        """
-        Returns a QuantumCircuit implementing the logical X gate for this logical qubit.
-        """
-        qc = QuantumCircuit(9)
-        for n in range(9):
-            qc.z(n)
-        return qc
-
-    def logical_Z(self):
-        """
-        Returns a QuantumCircuit implementing the logical Z gate for this logical qubit.
-        """
-        qc = QuantumCircuit(9)
-        for n in range(9):
-            qc.x(n)
-        return qc
+from qiskit.circuit import Gate
 
 class ConcatenatedShorQubit:
     """
     Class for constructing concatenations of the Shor nine qubit code recursively.
     """
-
     def __init__(self, n):
         """
         Initializes the class. n is number of concatenations of Shor nine qubit code with itself.
@@ -196,6 +34,8 @@ class ConcatenatedShorQubit:
 
         #Initialize circuit
         qc = QuantumCircuit(self.num_qubits)
+
+        #Construct encoder in two steps. First outer grouping of 3, then 3x inner grouping per outer group.
         outer_groups = np.split(np.arange(self.num_qubits), 3)
         outer_principal_qubits = [sub_indices[0] for sub_indices in outer_groups]
         
@@ -210,6 +50,7 @@ class ConcatenatedShorQubit:
             qc.cx(inner_principal_qubits[0], inner_principal_qubits[1])
             qc.cx(inner_principal_qubits[0], inner_principal_qubits[2])
 
+            #Recursive call
             for group in inner_group:
                 qc.compose(self._inner_code.encoder(), qubits = group, inplace = True)
         
@@ -219,6 +60,8 @@ class ConcatenatedShorQubit:
     def syndrome_correction_circuit(self, correct_syndromes = True, num_measurements = 1, remeasure_same_qubit = False, _classical_register = None):
         """
         Constructs the circuit for measuring syndromes and correcting the errors.
+        correct_syndromes can be set to control whether syndromes are simply diagnosed
+        or recovery actions are performed based on the syndromes.
         Classical registers behave badly with recursion, so this is implemented
         more imperatively.
         """    
@@ -229,31 +72,30 @@ class ConcatenatedShorQubit:
         
         #Initialize circuit and get stabilizers and recovering actions
         qc = QuantumCircuit(self.num_qubits + self.num_ancillas)
-        stabilizer_circuits = self.get_stabilizers(True)[::-1]
-        recovering_circuits = self.get_recovering_circuits(True)[::-1]
+        stabilizer_circuits = self.get_stabilizers(include_inner_stabilizers=True)[::-1]
+        recovering_circuits = self.get_recovering_circuits(include_inner_recovering_circuits=True)[::-1]
 
         classical_register_bits = ClassicalRegister(len(stabilizer_circuits)*num_measurements) if _classical_register is None else _classical_register
         qc.add_register(classical_register_bits)
 
         ancilla = self.num_qubits #Ancilla is the last qubit.
 
-        #Add each stabilizer to the circuit. In the Shor code the stabilizers from pairs
+        #Add each stabilizer to the circuit. In the Shor code the stabilizers form pairs
         #which each receive a classical register which the restoring action is conditioned on.
-        for n in range(len(stabilizer_circuits)//2):
-            for j in range(num_measurements if not remeasure_same_qubit else 1):
-                for k in range(2):
+        for n in range(len(stabilizer_circuits)//2): #for each pair
+            for j in range(num_measurements if not remeasure_same_qubit else 1): #for each measuremnt
+                for k in range(2): #for each stabilizer of the pair
                     #Measure the stabilizer using quantum phase estimation
                     cu = stabilizer_circuits[2*n + k].to_gate().control(1)
                     qc.h(ancilla)
                     qc.append(cu, [ancilla, *range(self.num_qubits)])
                     qc.h(ancilla)
-                    for l in range(num_measurements if remeasure_same_qubit else 1):
+                    for l in range(num_measurements if remeasure_same_qubit else 1): #for each measuremnt
                         qc.measure(ancilla, classical_register_bits[(2*n + k)*num_measurements + j + l])
                     qc.reset(ancilla)
 
             #Correct syndromes
             if correct_syndromes:
-                    
                 #Calculate expressions for determining what recovery action to take.
                 #Default is single measurement, but the expressions allow determining how to correct
                 #on a majority vote between many measurements.
@@ -278,7 +120,7 @@ class ConcatenatedShorQubit:
     
     def _get_classical_register_majority_expression(self, register):
         """
-        Returns an expression returning True if a register has a majority of bits set to 1.
+        Returns an expression returning True if the register has a majority of bits set to 1.
         """
         num_measurements = len(register)
         #When doing multiple measurements, majority of the measurements determine
@@ -286,15 +128,14 @@ class ConcatenatedShorQubit:
         #of 1's is generated.
         allowed_bit_strings = [i for i in range(2**num_measurements) if int.bit_count(i) > num_measurements/2]
         
-        #Get relevant classical bits
         expression = expr.lift(False)
         for bit_string in allowed_bit_strings:
-            #For each bit string with a majority of 1's, get equal expressions bitwise and and them together.
-            equivalences = [expr.equal(reg, bool(int(bit))) for reg, bit in zip(register, format(bit_string, f"0{num_measurements}b"))]
+            #For each bit string with a majority of 1's, get equal expressions bitwise and 'and' them together.
+            equals_expressions = [expr.equal(reg, bool(int(bit))) for reg, bit in zip(register, format(bit_string, f"0{num_measurements}b"))]
             clause = expr.lift(True)
             for i in range(num_measurements):
-                clause = expr.bit_and(equivalences[i], clause)
-            #Add the clause to the full expression.
+                clause = expr.bit_and(equals_expressions[i], clause)
+            #'or' all the clauses together.
             expression = expr.bit_or(expression, clause)
         return expression
 
@@ -352,7 +193,9 @@ class ConcatenatedShorQubit:
     
     def logical_H(self, use_naive = False, intermediate_error_correction = False):
         """
-        The logical H operation. If use_naive obtained by naively conjugating H on the input qubit with the encoder unitary.
+        Create the logical H operation. 
+        If use_naive obtained by naively conjugating H on the input qubit with the encoder unitary.
+        If intermediate_error_correction, add error correction placeholders in between logical operations.
         """
         #Cache lookup:
         cached_gate = self._cache.get(f'h{intermediate_error_correction}', None)
@@ -370,7 +213,7 @@ class ConcatenatedShorQubit:
             h = 1/np.sqrt(2)*(Operator.from_label(6*"I" + 3*"X") + Operator.from_label("IIZ"*3))
         else:
             h = 1/np.sqrt(2)*(Operator.from_label(9*"X") + Operator.from_label(9*"Z"))
-        #For using in stabilizer circuits, convert operation to a Clifford gate
+        #For when using in stabilizer circuits (only Clifford gates), convert operation to a Clifford gate
         #It is not trivial that the logical H gate would be a Clifford operation but it
         #turns out that it is the case!
         h_clifford = Clifford.from_operator(h)
@@ -378,6 +221,7 @@ class ConcatenatedShorQubit:
         if self.n == 1:
             qc = h_clifford.to_circuit()
         else:
+            #If n > 1, construct the generated circuit using logical gates of inner code.
             qc = self._construct_logical_circuit(h_clifford.to_circuit(), intermediate_error_correction)
         
         self._cache[f'h{intermediate_error_correction}'] = qc
@@ -408,6 +252,7 @@ class ConcatenatedShorQubit:
         if self.n == 1:
             qc = h_clifford.to_circuit()
         else:
+            #If n > 1, construct the generated circuit using logical gates of inner code.
             qc = self._construct_logical_circuit(h_clifford.to_circuit(), intermediate_error_correction)
 
         self._cache[f's{intermediate_error_correction}'] = qc
@@ -416,13 +261,17 @@ class ConcatenatedShorQubit:
     def _construct_logical_circuit(self, qc, error_correct):
         """
         Logical gates can be expressed as circuits of logical gates of the inner codes. This
-        function takes a 9 logical qubit Clifford circuit and converts it to a circuit on the
-        physical qubits.
+        function takes a 9 qubit Clifford circuit and converts it to a circuit using the logical
+        operations of the inner code.
+        If error_correct, error correction placeholders are inserted in between logical operations.
         """
+        #Compile list of instructions from qc.
         instructions = []
         for gate in qc:
             instructions.append((gate.name, [qc.find_bit(qubit).index for qubit in gate.qubits]))
 
+        #Set up a ShorCircuit with 9 qubits encoded using the inner code (n-1).
+        #Apply instructions from qc to the ShorCircuit.
         shor_circuit = ShorCircuit([self.n - 1 for _ in range(9)], include_ancilla = False, auto_encode=False)
         for instruction in instructions:
             if error_correct:
@@ -443,13 +292,15 @@ class ConcatenatedShorQubit:
                 case "z":
                     shor_circuit.z(instruction[1][0])
         
-        return shor_circuit.get_circuit(transpile = False).decompose()
+        #Decompose to basis gates and error correction placeholders
+        result = shor_circuit.get_circuit(transpile = False).decompose()
+        return result
 
     def get_stabilizers(self, include_inner_stabilizers = False):
         """
         Returns the stabilizers for the outer code. These are constructed using the logical X and Z operations on the inner level
         logical states.
-        param include_inner_stabilizers can be set to also return inner stabilizers.
+        include_inner_stabilizers can be set to also return stabilizers of the inner code.
         """
         #Base case
         if self.n == 0:
@@ -480,6 +331,7 @@ class ConcatenatedShorQubit:
         inner_stabilizer_circuits = []
         if include_inner_stabilizers == True:
             inner_stabilizers = self._inner_code.get_stabilizers(True)
+            #The inner code stabilizers apply to each of the 9 groups individually.
             for group in groups:
                 for stabilizer in inner_stabilizers:
                     qc = QuantumCircuit(self.num_qubits)
@@ -491,52 +343,55 @@ class ConcatenatedShorQubit:
     def get_recovering_circuits(self, include_inner_recovering_circuits = False):
         """
         Get circuits for performing the recovery operations.
+        include_inner_recovering_circuits can be set to also include
+        recovery operations of the inner code.
         """
         #Base case
         if self.n == 0:
             return [] #No recovering actions for a single qubit.
         
         #Inductive step
-        groups = np.split(np.arange(self.num_qubits), 3)
-        
         #Construct phase flip correction circuits.
+        outer_groups = np.split(np.arange(self.num_qubits), 3)
         zzz_circuits = []
-        for group in groups:
+        for outer_group in outer_groups:
             qc = QuantumCircuit(self.num_qubits)
-            for sub_group in np.split(group, 3):
-                qc.compose(self._inner_code.logical_Z(), qubits = sub_group, inplace = True)
+            for inner_group in np.split(outer_group, 3):
+                qc.compose(self._inner_code.logical_Z(), qubits = inner_group, inplace = True)
             zzz_circuits.append(qc)
 
         #Construct bit flip correction circuits
         x_circuits = []
-        for group in groups:
-            for sub_group in np.split(group, 3):
+        for outer_group in outer_groups:
+            for inner_group in np.split(outer_group, 3):
                 qc = QuantumCircuit(self.num_qubits)
-                qc.compose(self._inner_code.logical_X(), qubits = sub_group, inplace = True)
+                qc.compose(self._inner_code.logical_X(), qubits = inner_group, inplace = True)
                 x_circuits.append(qc)
 
-        #Construct the recovery circuits for each of the nine "physical" qubits.
+        #Construct the recovery circuits for each of the nine inner qubits.
         all_inner_recovering_circuits = []
         if include_inner_recovering_circuits:
             inner_recovering_circuits = self._inner_code.get_recovering_circuits(True)
-            for sub_group in np.split(np.arange(self.num_qubits), 9):
+            for group in np.split(np.arange(self.num_qubits), 9):
                 for recovering_circuit in inner_recovering_circuits:
                     qc = QuantumCircuit(self.num_qubits)
-                    qc.compose(recovering_circuit, qubits = sub_group, inplace = True)
+                    qc.compose(recovering_circuit, qubits = group, inplace = True)
                     all_inner_recovering_circuits.append(qc)
                     
         return [*zzz_circuits, *x_circuits, *all_inner_recovering_circuits]
 
 class ShorCircuit:
     """
-    This class handles construction of QuantumCircuits using the Shor nine qubit quantum error correction code
+    This class handles construction of QuantumCircuits using the concatenated Shor nine qubit quantum error correction code.
     """
 
     def __init__(self, qubit_code_depths, include_ancilla = True, auto_encode = True, num_measurements_in_error_correction = 1):
         """
-        Initialize the ShorCircuit. Each qubit has a ShorQubit as its encoding used for performing gates
-        which is an n times concatenated ShorQubit where n is given for each qubit as the qubit_code_depths
-        param.
+        Initialize the ShorCircuit. Each qubit has a ConcatenatedShorQubit encoding used for performing gates.
+        qubit_code_depths: An array of integers defining each qubits encoding level (n)
+        include_ancilla: Whether to include measurement ancilla by default.
+        auto_encode: whether to automatically add encoders to the circuit when initialising.
+        num_measurements_in_error_correction: Number of round of measurement to do majority vote between.
         """
         #Only generate as many inner codes as there are different encoding depths.
         self._inner_codes = dict([(n, ConcatenatedShorQubit(n)) for n in set(qubit_code_depths)])
@@ -581,7 +436,7 @@ class ShorCircuit:
         decoder.name = f"Decoder{qubit}"
         self._circuit.compose(decoder, qubits = self.qubit_indices[qubit], inplace=True)
     
-    def measure(self, qubit, classical_register, stabilizer_measurement = False):
+    def measure(self, qubit, classical_register):
         """
         Measure the specified logical qubit to the provided classical register.
         """
@@ -642,30 +497,26 @@ class ShorCircuit:
         cxl = self._logical_cx(control, target, keep_transversal)
         self._circuit.compose(cxl, inplace=True)
 
-    def error_correct(self, qubit, legacy=False):
+    def error_correct(self, qubit):
         """
         Perform error correction on the qubit.
         """
-        if legacy:
-            error_correction_circuit = self.codes[qubit].syndrome_correction_circuit()
-            error_correction_circuit.name = f"Error_correct_{qubit}"
-            qubit_indices = self.qubit_indices[qubit]
-            self._circuit.compose(error_correction_circuit, qubits = [*qubit_indices, self.ancilla], inplace=True) 
-        else:
-            code = self.codes[qubit]
-            qubit_indices = self.qubit_indices[qubit]
-            self._circuit.compose(ErrorCorrect(code.num_qubits, f"Error_correct_{code.n}"), qubits=qubit_indices, inplace=True)
-
+        code = self.codes[qubit]
+        qubit_indices = self.qubit_indices[qubit]
+        self._circuit.compose(ErrorCorrect(code.num_qubits, f"Error_correct_{code.n}"), qubits=qubit_indices, inplace=True)
 
     def _logical_cx(self, control, target, keep_transversal):
         """
         Construct a logical CNOT gate between two logical qubits.
+        keep_transversal can be used to keep a transversal implementation when
+        targets n is smaller than controls n.
         """
         #Cache lookup:
-        cached_gate = self._cache.get(f'{control}{target}', None)
+        cached_gate = self._cache.get(f'cx_{control}{target}', None)
         if cached_gate is not None:
             return cached_gate
 
+        #Get relevant resources
         control_code = self.codes[control]
         target_code = self.codes[target]
         control_indices = self.qubit_indices[control]
@@ -687,42 +538,84 @@ class ShorCircuit:
         if control_code.n % 2 == 1 and target_code.n % 2 == 1:
             cx_logical.cx(1,0)
 
-        #Construct full transversal logical CNOT
-        cx_transversal = QuantumCircuit(self.num_qubits + self.num_ancillas)
+        #Construct full logical CNOT
+        cx = QuantumCircuit(self.num_qubits + self.num_ancillas)
         #The gate will look differently depending on the number of physical qubits for each logical qubit.
         if control_code.num_qubits == target_code.num_qubits:
             #Transverse implementation
             for n in range(len(control_indices)):
                 qubits = [control_indices[n], target_indices[n]]
-                cx_transversal.compose(cx_logical, qubits = qubits, inplace=True)
+                cx.compose(cx_logical, qubits = qubits, inplace=True)
         
         if control_code.num_qubits < target_code.num_qubits:
             #Each control qubit controls a group of the target.
             num_target_qubits = target_code.num_qubits // control_code.num_qubits
             for n in range(control_code.num_qubits):
                 for k in range(num_target_qubits):
-                    cx_transversal.compose(cx_logical, qubits = [control_indices[n], target_indices[num_target_qubits*n + k]], inplace=True)
+                    cx.compose(cx_logical, qubits = [control_indices[n], target_indices[num_target_qubits*n + k]], inplace=True)
 
         if control_code.num_qubits > target_code.num_qubits:
             #If an entangling gate is added per control qubit it will only achieve propagating errors from
             #all control qubits without any benefit over simply adding an entangling gate to a single
-            #of the qubits. Both options are implemented to experiment with this.
+            #of the qubits. Both options are implemented to allow experimentation with this.
             num_control_qubits = control_code.num_qubits // target_code.num_qubits
             if keep_transversal:
                 for k in range(target_code.num_qubits):
                     for n in range(num_control_qubits):
-                        cx_transversal.compose(cx_logical, qubits = [control_indices[num_control_qubits*k + n], target_indices[k]], inplace=True)
+                        cx.compose(cx_logical, qubits = [control_indices[num_control_qubits*k + n], target_indices[k]], inplace=True)
             else:
                 for k in range(0, target_code.num_qubits, max(target_code.num_qubits//3, 1)):
                     for n in range(control_code.num_qubits//3):
-                        cx_transversal.compose(cx_logical, qubits = [control_indices[n], target_indices[k]], inplace=True)
+                        cx.compose(cx_logical, qubits = [control_indices[n], target_indices[k]], inplace=True)
 
-
-        cx_gate = cx_transversal.to_gate()
+        cx_gate = cx.to_gate()
         cx_gate.name = f"CX_logical_({control})->({target})"
 
-        self._cache[f'{control}{target}'] = cx_gate
+        self._cache[f'cx_{control}{target}'] = cx_gate
         return cx_gate
+
+    def get_circuit(self, transpile = True, classical_register = None):
+        """
+        Returns the QuantumCircuit built using the Shor encoding. If transpile is false, error correcting
+        circuits are not inserted in the placeholder locations. Classical register can be optionally provided
+        (mostly useful when num_measurements > 1 since then the classical register automatically created
+        is not large enough).
+        """
+        return self._transpile(classical_register=classical_register) if transpile else self._circuit.copy()
+
+    def _transpile(self, classical_register = None):
+        """
+        Replaces placeholder Error Correct instructions with actual error correction circuits.
+        If a classical register is passed, this will be used for syndrome measurements throughout.
+        """
+        original_circuit = self._circuit.copy()
+        original_circuit = original_circuit.decompose()
+        classical_register = ClassicalRegister(self.num_classical_bits) if classical_register is None else classical_register
+        
+        #Find error correction placeholders in the CircuitInstructions.
+        error_corrections = []
+        for index, circuit_instruction in enumerate(original_circuit._data):
+            if circuit_instruction.name == "ErrorCorrect":
+                qubits = circuit_instruction.qubits
+                n = int(circuit_instruction.label[-1]) #Last character is depth
+                error_corrections.append((index, n, qubits))
+        
+        #Reconstruct the circuit with error correction inserted.
+        previous_index = -1
+        final_index = len(original_circuit._data)
+        self._circuit.clear() 
+        for error_correction in [*error_corrections, (final_index,None,None)]:
+            index, n, qubits = error_correction
+            for instruction in original_circuit._data[previous_index + 1 : index]: #Skip the ErrorCorrect instruction
+                self._circuit._data.append(instruction)
+            previous_index = index
+            if index == final_index:
+                break
+            self._circuit.compose(ConcatenatedShorQubit(n).syndrome_correction_circuit(_classical_register=classical_register, num_measurements=self.num_measurements_in_error_correction), 
+                                  qubits = [*qubits, self.ancilla], 
+                                  inplace=True)
+
+        return self._circuit
 
     def save_stabilizer(self, **kwargs):
         """
@@ -759,45 +652,11 @@ class ShorCircuit:
         """
         return self._circuit.if_test(**kwargs)
 
-    def get_circuit(self, transpile = True, classical_register = None):
-        """
-        Returns the QuantumCircuit built using the Shor encoding.
-        """
-        return self._transpile(classical_register=classical_register) if transpile else self._circuit.copy()
-
-    def _transpile(self, classical_register = None):
-        """
-        Replaces placeholder Error Correct instructions with actual error correction circuits.
-        If a classical register is passed, this will be used for syndrome measurements throughout.
-        """
-        original_circuit = self._circuit.copy()
-        original_circuit = original_circuit.decompose()
-        classical_register = ClassicalRegister(self.num_classical_bits) if classical_register is None else classical_register
-        error_corrections = []
-        for index, circuit_instruction in enumerate(original_circuit._data):
-            if circuit_instruction.name == "ErrorCorrect":
-                qubits = circuit_instruction.qubits
-                n = int(circuit_instruction.label[-1]) #Last character is depth
-                error_corrections.append((index, n, qubits))
-        
-        previous_index = -1
-        final_index = len(original_circuit._data)
-        self._circuit.clear() #Reconstruct the circuit with error correction inserted.
-
-        for error_correction in [*error_corrections, (final_index,None,None)]:
-            index, n, qubits = error_correction
-            for instruction in original_circuit._data[previous_index + 1 : index]: #Skip the ErrorCorrect instruction
-                self._circuit._data.append(instruction)
-            previous_index = index
-            if index == final_index:
-                break
-            self._circuit.compose(ConcatenatedShorQubit(n).syndrome_correction_circuit(_classical_register=classical_register, num_measurements=self.num_measurements_in_error_correction), qubits = [*qubits, self.ancilla], inplace=True)
-
-        return self._circuit
-
-
 
 class ErrorCorrect(Gate):
+    """
+    Instruction acting as a placeholder for ErrorCorrection.
+    """
     def __init__(self, num_qubits, label):
         self.name = "ErrorCorrect"
         super().__init__(self.name, num_qubits, [], label = label)
