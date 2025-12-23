@@ -1,6 +1,22 @@
 # QC 803: Concatenated Shor codes
 
-This project provides the means to construct circuits of Shor encoded logical qubits.  
+This project provides the means to construct circuits of concatenated Shor encoded logical qubits.
+It consists of a single package package, shor_package.
+
+## Running the code
+1. Clone the repo.
+2. Make sure you are using Python version 3.13.1 as Qiskit Aer is not compatible with the newest version of python. Use for example pyenv to manage Python versions (https://github.com/pyenv/pyenv).
+3. Navigate to the root of the repo.
+4. Create a new python virtual environment: 
+```sh
+python -m venv .venv
+source .venv/bin/activate
+```
+5. Install the dependencies
+```sh
+pip install .
+```
+You are now ready to run unit tests or use the package (see below).
 
 ## File Structure
 ```
