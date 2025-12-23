@@ -603,19 +603,20 @@ class ShorCircuit:
         #Reconstruct the circuit with error correction inserted.
         previous_index = -1
         final_index = len(original_circuit._data)
-        self._circuit.clear() 
+        new_circuit = self._circuit.copy()
+        new_circuit.clear()
         for error_correction in [*error_corrections, (final_index,None,None)]:
             index, n, qubits = error_correction
             for instruction in original_circuit._data[previous_index + 1 : index]: #Skip the ErrorCorrect instruction
-                self._circuit._data.append(instruction)
+                new_circuit._data.append(instruction)
             previous_index = index
             if index == final_index:
                 break
-            self._circuit.compose(ConcatenatedShorQubit(n).syndrome_correction_circuit(_classical_register=classical_register, num_measurements=self.num_measurements_in_error_correction), 
+            new_circuit.compose(ConcatenatedShorQubit(n).syndrome_correction_circuit(_classical_register=classical_register, num_measurements=self.num_measurements_in_error_correction), 
                                   qubits = [*qubits, self.ancilla], 
                                   inplace=True)
 
-        return self._circuit
+        return new_circuit
 
     def save_stabilizer(self, **kwargs):
         """

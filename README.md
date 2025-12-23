@@ -1,6 +1,6 @@
-# QC 803: Final Project Repository Template
+# QC 803: Concatenated Shor codes
 
-This is an optional template for the QC 803 final project based on https://packaging.python.org/en/latest/tutorials/packaging-projects/.
+This project provides the means to construct circuits of Shor encoded logical qubits.  
 
 ## File Structure
 ```
