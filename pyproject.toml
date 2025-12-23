@@ -3,7 +3,7 @@ requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "Concatenated Shor codes"
+name = "ConcatenatedShorCode"
 version = "1.0.0"
 description = "This projecet implements concatenated Shor codes using Qiskit."
 readme = "README.md"
