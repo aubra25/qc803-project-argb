@@ -3,20 +3,26 @@ requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "example"
-version = "0.0.1"
-description = "This is an example project."
+name = "Concatenated Shor codes"
+version = "1.0.0"
+description = "This projecet implements concatenated Shor codes using Qiskit."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 authors = [
-    {name = "Example", email = "example@example.com"},
+    {name = "August Rumle Gersholm Brask", email = "aubra25@student.sdu.dk"},
 ]
-keywords = ["example"]
+keywords = ["Shor code"]
 
 dependencies = [
   "qiskit",
-  "pytest"
+  "pytest",
+  "numpy",
+  "matplotlib",
+  "pylatexenc",
+  "sympy",
+  "qiskit-aer",
+  "ipykernel"
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/example_package"]
+packages = ["src/shor_code_package"]
